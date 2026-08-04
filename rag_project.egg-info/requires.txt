@@ -1,0 +1,9 @@
+torch
+torchvision
+torchaudio
+transformers
+accelerate
+sentence-transformers
+chromadb
+tqdm
+numpy

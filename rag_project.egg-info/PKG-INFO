@@ -1,0 +1,14 @@
+Metadata-Version: 2.4
+Name: rag-project
+Version: 0.1.0
+Summary: RAG with Qwen3-0.6B
+Requires-Python: >=3.11
+Requires-Dist: torch
+Requires-Dist: torchvision
+Requires-Dist: torchaudio
+Requires-Dist: transformers
+Requires-Dist: accelerate
+Requires-Dist: sentence-transformers
+Requires-Dist: chromadb
+Requires-Dist: tqdm
+Requires-Dist: numpy
