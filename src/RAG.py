@@ -10,6 +10,7 @@ import Stemmer
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
+import time
 
 
 class MinimalSource(BaseModel):
@@ -98,7 +99,7 @@ class QwenModel:
 
         generated_ids = self.model.generate(
             **inputs,
-            max_new_tokens=512,
+            max_new_tokens=64,
         )
 
         output_ids = generated_ids[0][len(inputs.input_ids[0]):]
@@ -340,28 +341,40 @@ class RAGService:
                     relevant_chunks.append(chunk["content"])
         return self.model.generate_answer(query, relevant_chunks)
 
-    def answer_dataset(self, dataset_path: Path, k: int, save_directory: Path):
-        with open(dataset_path, "r") as f:
-            questions = json.load(f)
-
-        questions = questions["rag_questions"]
+    def answer_dataset(
+        self,
+        student_search_results_path: Path,
+        save_directory: Path,
+    ):
+        with open(student_search_results_path, "r") as f:
+            search_results = json.load(f)
 
         answered_questions = []
 
-        for item in questions:
-            answer = self.service.answer(item["question"], k)
+        for i, item in enumerate(search_results["search_results"], 1):
+            print(f"Answering question {i}/{len(search_results['search_results'])}")
+
+            snippets = self.get_snippets(item["retrieved_sources"])
+
+            answer = self.model.generate_answer(
+                item["question"],
+                snippets,
+            )
+
             answered_question = AnsweredQuestion(
                 question_id=item["question_id"],
                 question=item["question"],
-                sources=self.service.search(item["question"], k),
+                sources=item["retrieved_sources"],
                 answer=answer,
             )
+
             answered_questions.append(answered_question)
 
         full_results = RagDataset(
             rag_questions=answered_questions
         )
 
+        save_directory = Path(save_directory)
         save_directory.mkdir(parents=True, exist_ok=True)
 
         with open(save_directory / "answered_questions.json", "w") as f:
@@ -392,5 +405,5 @@ class RAG:
     def answer(self, query: str, k: int):
         print(self.service.answer(query, k))
 
-    def answer_dataset(self, dataset_path: Path, k: int, save_directory: Path):
-        self.service.answer_dataset(dataset_path, k, save_directory)
+    def answer_dataset(self, student_search_results_path: Path, save_directory: Path):
+        self.service.answer_dataset(student_search_results_path, save_directory)

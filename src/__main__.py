@@ -21,6 +21,9 @@ class CLI:
     def answer(self, query: str, k: int):
         self.service.answer(query, k)
 
+    def answer_dataset(self, student_search_results_path: Path, save_directory: Path):
+        self.service.answer_dataset(student_search_results_path, save_directory)
+
 
 if __name__ == "__main__":
     fire.Fire(CLI())
