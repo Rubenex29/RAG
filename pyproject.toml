@@ -9,4 +9,7 @@ dependencies = [
     "bm25s",
     "PyStemmer",
     "tqdm",
+    "transformers",
+    "torch",
+    "accelerate"
 ]
