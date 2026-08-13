@@ -35,7 +35,7 @@ class RagDataset(BaseModel):
 
 class MinimalSearchResults(BaseModel):
     question_id: str
-    question: str
+    question_str: str
     retrieved_sources: List[MinimalSource]
 
 
@@ -306,7 +306,7 @@ class RAGService:
         for item in questions:
             result = MinimalSearchResults(
                 question_id=item["question_id"],
-                question=item["question"],
+                question_str=item["question"],
                 retrieved_sources=self.search(item["question"], k),
             )
 
@@ -316,10 +316,10 @@ class RAGService:
             search_results=search_results,
             k=k,
         )
-
+        print("OUTPUT PATH:", save_directory / "dataset_docs_public.json")
         save_directory.mkdir(parents=True, exist_ok=True)
 
-        with open(save_directory / "search_results.json", "w") as f:
+        with open(save_directory / "dataset_docs_public.json", "w") as f:
             json.dump(full_results.model_dump(), f, indent=2)
 
         return full_results
@@ -350,20 +350,30 @@ class RAGService:
             search_results = json.load(f)
 
         answered_questions = []
-
+        chunks = self.store.load_chunks()
+        start_time = time.time()
         for i, item in enumerate(search_results["search_results"], 1):
             print(f"Answering question {i}/{len(search_results['search_results'])}")
 
-            snippets = self.get_snippets(item["retrieved_sources"])
+            first = item["retrieved_sources"][0]["first_character_index"]
+            last = item["retrieved_sources"][0]["last_character_index"]
 
+            snippets = []
+            for chunk in chunks:
+                if (
+                    chunk["metadata"]["file_path"] == item["retrieved_sources"][0]["file_path"]
+                    and chunk["metadata"]["first_character_index"] == first
+                    and chunk["metadata"]["last_character_index"] == last
+                ):
+                    snippets.append(chunk["content"])
             answer = self.model.generate_answer(
-                item["question"],
+                item["question_str"],
                 snippets,
             )
 
             answered_question = AnsweredQuestion(
                 question_id=item["question_id"],
-                question=item["question"],
+                question=item["question_str"],
                 sources=item["retrieved_sources"],
                 answer=answer,
             )
@@ -379,7 +389,8 @@ class RAGService:
 
         with open(save_directory / "answered_questions.json", "w") as f:
             json.dump(full_results.model_dump(), f, indent=2)
-
+        end_time = time.time()
+        print(f"Answered {len(answered_questions)} questions in {end_time - start_time:.2f} seconds.")
         return full_results
 
 
@@ -407,3 +418,5 @@ class RAG:
 
     def answer_dataset(self, student_search_results_path: Path, save_directory: Path):
         self.service.answer_dataset(student_search_results_path, save_directory)
+
+# export HF_HOME=/sgoinfre/$(whoami)/hf_cache
