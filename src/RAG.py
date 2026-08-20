@@ -34,7 +34,7 @@ class RagDataset(BaseModel):
 
 class MinimalSearchResults(BaseModel):
     question_id: str
-    question: str
+    question_str: str
     retrieved_sources: List[MinimalSource]
 
 
@@ -105,7 +105,7 @@ class QwenModel:
 
         generated_ids = self.model.generate(
             **inputs,
-            max_new_tokens=64,
+            max_new_tokens=32,
         )
 
         output_ids = generated_ids[0][len(inputs.input_ids[0]):]
@@ -194,11 +194,12 @@ class Chunker:
             )
         return chunks
 
-    def python_chunking(self, source_code: str, file: Path):
+    def python_chunking(self, source_code: str, file: Path, chunk_size=2000):
         tree = ast.parse(source_code)
-        lines = source_code.splitlines(keepends=True)
-        line_offsets = [0]
 
+        lines = source_code.splitlines(keepends=True)
+
+        line_offsets = [0]
         for line in lines:
             line_offsets.append(line_offsets[-1] + len(line))
 
@@ -209,28 +210,53 @@ class Chunker:
             prefix = line.encode("utf-8")[:col_offset].decode("utf-8")
             return line_offsets[lineno - 1] + len(prefix)
 
+        MAX_CHUNK_LENGTH = chunk_size
+
         for node in ast.walk(tree):
             if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
 
             code = ast.get_source_segment(source_code, node)
+            file_path = str(file.relative_to(self.project_root))
+
             if code is None:
                 continue
 
-            start = character_offset(node.lineno, node.col_offset)
-            end = character_offset(node.end_lineno, node.end_col_offset)
+            # Function fits in one chunk
+            if len(code) <= MAX_CHUNK_LENGTH:
+                chunks.append(
+                    {
+                        "content": code,
+                        "metadata": {
+                            "type": "function",
+                            "file_path": file_path,
+                            "first_character_index": character_offset(
+                                node.lineno, node.col_offset
+                            ),
+                            "last_character_index": character_offset(
+                                node.end_lineno, node.end_col_offset
+                            ),
+                        },
+                    }
+                )
+                continue
 
-            chunks.append(
-                {
-                    "content": code,
-                    "metadata": {
-                        "type": "function",
-                        "file_path": str(file.relative_to(self.project_root)),
-                        "first_character_index": start,
-                        "last_character_index": end,
-                    },
-                }
-            )
+            # Function is too large: split it into chunks
+            start = character_offset(node.lineno, node.col_offset)
+            for chunk_start in range(0, len(code), MAX_CHUNK_LENGTH):
+                chunk_end = min(chunk_start + MAX_CHUNK_LENGTH, len(code))
+
+                chunks.append(
+                    {
+                        "content": code[chunk_start:chunk_end],
+                        "metadata": {
+                            "type": "function",
+                            "file_path": file_path,
+                            "first_character_index": start + chunk_start,
+                            "last_character_index": start + chunk_end,
+                        },
+                    }
+                )
 
         return chunks
 
@@ -241,7 +267,7 @@ class Chunker:
 
         if file.suffix in {".py"}:
             text = file.read_text(encoding="utf-8", errors="ignore")
-            return self.python_chunking(text, file)
+            return self.python_chunking(text, file, max_chunk_size)
 
         return []
 
@@ -311,7 +337,7 @@ class RAGService:
         for item in questions:
             result = MinimalSearchResults(
                 question_id=item.question_id,
-                question=item.question,
+                question_str=item.question,
                 retrieved_sources=self.search(item.question, k),
             )
 
