@@ -1,4 +1,3 @@
-
 import ast
 import json
 from pathlib import Path
@@ -35,7 +34,7 @@ class RagDataset(BaseModel):
 
 class MinimalSearchResults(BaseModel):
     question_id: str
-    question_str: str
+    question: str
     retrieved_sources: List[MinimalSource]
 
 
@@ -71,6 +70,13 @@ class QwenModel:
         )
 
         prompt = f"""Answer the question using the provided context.
+
+        Rules:
+        - Use only facts explicitly stated in the context.
+        - Do not use outside knowledge.
+        - Do not guess or invent details.
+        - If the context does not contain enough information, answer exactly:
+        I don't know based on the provided context.
 
         Question:
         {query}
@@ -190,41 +196,41 @@ class Chunker:
 
     def python_chunking(self, source_code: str, file: Path):
         tree = ast.parse(source_code)
+        lines = source_code.splitlines(keepends=True)
+        line_offsets = [0]
+
+        for line in lines:
+            line_offsets.append(line_offsets[-1] + len(line))
+
         chunks = []
 
-        for node in tree.body:
-            if isinstance(node, ast.FunctionDef):
-                code = ast.get_source_segment(source_code, node)
-                chunks.append(
-                    {
-                        "content": code,
-                        "metadata": {
-                            "type": "function",
-                            "file_path": str(
-                                file.relative_to(self.project_root)
-                            ),
-                            "first_character_index": node.lineno,
-                            "last_character_index": node.end_lineno,
-                        },
-                    }
-                )
-            elif isinstance(node, ast.ClassDef):
-                for child in node.body:
-                    if isinstance(child, ast.FunctionDef):
-                        code = ast.get_source_segment(source_code, child)
-                        chunks.append(
-                            {
-                                "content": code,
-                                "metadata": {
-                                    "type": "method",
-                                    "file_path": str(
-                                        file.relative_to(self.project_root)
-                                    ),
-                                    "first_character_index": child.lineno,
-                                    "last_character_index": child.end_lineno,
-                                },
-                            }
-                        )
+        def character_offset(lineno, col_offset):
+            line = lines[lineno - 1]
+            prefix = line.encode("utf-8")[:col_offset].decode("utf-8")
+            return line_offsets[lineno - 1] + len(prefix)
+
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+
+            code = ast.get_source_segment(source_code, node)
+            if code is None:
+                continue
+
+            start = character_offset(node.lineno, node.col_offset)
+            end = character_offset(node.end_lineno, node.end_col_offset)
+
+            chunks.append(
+                {
+                    "content": code,
+                    "metadata": {
+                        "type": "function",
+                        "file_path": str(file.relative_to(self.project_root)),
+                        "first_character_index": start,
+                        "last_character_index": end,
+                    },
+                }
+            )
 
         return chunks
 
@@ -251,7 +257,6 @@ class RAGService:
         self.store = ChunkStore(self.processed_dir)
         self.chunker = Chunker(self.project_root, self.repo)
         self.retriever = Retriever(self.store, self.tokenizer)
-        self.model = QwenModel()
 
     def index(self, max_chunk_size=2000):
         files = self.chunker.process_files()
@@ -287,27 +292,27 @@ class RAGService:
         for result in results:
             first_char_index = result["metadata"]["first_character_index"]
             last_char_index = result["metadata"]["last_character_index"]
-            result_dict.append({
-                "file_path": result["metadata"]["file_path"],
-                "first_character_index": first_char_index,
-                "last_character_index": last_char_index,
-            })
+            result_dict.append(MinimalSource(
+                file_path=result["metadata"]["file_path"],
+                first_character_index=first_char_index,
+                last_character_index=last_char_index,
+            ))
         return result_dict
 
     def search_dataset(self, dataset_path: Path, k: int, save_directory: Path):
         save_directory = Path(save_directory)
         with open(dataset_path, "r") as f:
-            questions = json.load(f)
+            dataset = RagDataset.model_validate_json(f.read())
 
-        questions = questions["rag_questions"]
+        questions = dataset.rag_questions
 
         search_results = []
 
         for item in questions:
             result = MinimalSearchResults(
-                question_id=item["question_id"],
-                question_str=item["question"],
-                retrieved_sources=self.search(item["question"], k),
+                question_id=item.question_id,
+                question=item.question,
+                retrieved_sources=self.search(item.question, k),
             )
 
             search_results.append(result)
@@ -324,64 +329,79 @@ class RAGService:
 
         return full_results
 
-    def answer(self, query: str, k: int):
-        search_results = self.search(query, k)
-        # wanna access the chunks in self.store where file_path in search_results and first_character_index and last_character_index match
-        chunks = self.store.load_chunks()
-        relevant_chunks = []
-        for result in search_results:
+    def get_snippets(self, chunks, sources):
+        snippets = []
+
+        for source in sources:
+            source_file_path = source.file_path
+            source_first = source.first_character_index
+            source_last = source.last_character_index
+
             for chunk in chunks:
+                metadata = chunk["metadata"]
+
                 if (
-                    chunk["metadata"]["file_path"] == result["file_path"]
-                    and chunk["metadata"]["first_character_index"]
-                    == result["first_character_index"]
-                    and chunk["metadata"]["last_character_index"]
-                    == result["last_character_index"]
+                    metadata["file_path"] == source_file_path
+                    and metadata["first_character_index"] == source_first
+                    and metadata["last_character_index"] == source_last
                 ):
-                    relevant_chunks.append(chunk["content"])
-        return self.model.generate_answer(query, relevant_chunks)
+                    snippets.append(chunk["content"])
+                    break
+
+        return snippets
+
+    def answer(self, query: str, k: int):
+        self.model = QwenModel()
+        search_results = self.search(query, k)
+        chunks = self.store.load_chunks()
+        snippets = self.get_snippets(chunks, search_results)
+
+        return MinimalAnswer(
+            question_id=str(uuid.uuid4()),
+            question=query,
+            retrieved_sources=search_results,
+            answer=self.model.generate_answer(query, snippets),
+        )
 
     def answer_dataset(
         self,
         student_search_results_path: Path,
         save_directory: Path,
     ):
+        self.model = QwenModel()
         with open(student_search_results_path, "r") as f:
-            search_results = json.load(f)
+            search_results = StudentSearchResults.model_validate_json(f.read())
 
-        answered_questions = []
         chunks = self.store.load_chunks()
+        answered_questions = []
         start_time = time.time()
-        for i, item in enumerate(search_results["search_results"], 1):
-            print(f"Answering question {i}/{len(search_results['search_results'])}")
 
-            first = item["retrieved_sources"][0]["first_character_index"]
-            last = item["retrieved_sources"][0]["last_character_index"]
+        for item in tqdm(
+            search_results.search_results,
+            desc="Answering questions",
+        ):
+            snippets = self.get_snippets(
+                chunks,
+                item.retrieved_sources,
+            )
 
-            snippets = []
-            for chunk in chunks:
-                if (
-                    chunk["metadata"]["file_path"] == item["retrieved_sources"][0]["file_path"]
-                    and chunk["metadata"]["first_character_index"] == first
-                    and chunk["metadata"]["last_character_index"] == last
-                ):
-                    snippets.append(chunk["content"])
             answer = self.model.generate_answer(
-                item["question_str"],
+                item.question,
                 snippets,
             )
 
-            answered_question = AnsweredQuestion(
-                question_id=item["question_id"],
-                question=item["question_str"],
-                sources=item["retrieved_sources"],
-                answer=answer,
+            answered_questions.append(
+                MinimalAnswer(
+                    question_id=item.question_id,
+                    question=item.question,
+                    retrieved_sources=item.retrieved_sources,
+                    answer=answer,
+                )
             )
 
-            answered_questions.append(answered_question)
-
-        full_results = RagDataset(
-            rag_questions=answered_questions
+        full_results = StudentSearchResultsAndAnswer(
+            search_results=answered_questions,
+            k=search_results.k,
         )
 
         save_directory = Path(save_directory)
@@ -389,8 +409,13 @@ class RAGService:
 
         with open(save_directory / "answered_questions.json", "w") as f:
             json.dump(full_results.model_dump(), f, indent=2)
+
         end_time = time.time()
-        print(f"Answered {len(answered_questions)} questions in {end_time - start_time:.2f} seconds.")
+        print(
+            f"Answered {len(answered_questions)} questions "
+            f"in {end_time - start_time:.2f} seconds."
+        )
+
         return full_results
 
 
@@ -405,9 +430,9 @@ class RAG:
         results = self.service.search(query, k)
         for idx, entry in enumerate(results):
             print(f"Result {idx + 1}:")
-            print(f"File Path: {entry['file_path']}")
-            print(f"First Character Index: {entry['first_character_index']}")
-            print(f"Last Character Index: {entry['last_character_index']}")
+            print(f"File Path: {entry.file_path}")
+            print(f"First Character Index: {entry.first_character_index}")
+            print(f"Last Character Index: {entry.last_character_index}")
             print("-" * 40)
 
     def search_dataset(self, dataset_path: Path, k: int, save_directory: Path):
@@ -417,6 +442,8 @@ class RAG:
         print(self.service.answer(query, k))
 
     def answer_dataset(self, student_search_results_path: Path, save_directory: Path):
-        self.service.answer_dataset(student_search_results_path, save_directory)
-
+        try:
+            self.service.answer_dataset(student_search_results_path, save_directory)
+        except Exception as e:
+            print(f"An error occurred while answering the dataset: {e}")
 # export HF_HOME=/sgoinfre/$(whoami)/hf_cache
