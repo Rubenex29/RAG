@@ -98,3 +98,4 @@ The following table describes configurable parameters of the chart in `values.ya
 | serviceName | string | "" | Service name |
 | servicePort | int | 80 | Service port |
 | labels.environment | string | test | Environment name |
+'
