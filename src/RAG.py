@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 from pydantic import BaseModel, Field
 import uuid
-from typing import List
+from typing import Any, Dict, List
 import bm25s
 import Stemmer
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -34,7 +34,7 @@ class RagDataset(BaseModel):
 
 class MinimalSearchResults(BaseModel):
     question_id: str
-    question: str
+    question_str: str
     retrieved_sources: List[MinimalSource]
 
 
@@ -62,7 +62,7 @@ class QwenModel:
             device_map="auto"
         )
 
-    def generate_answer(self, query: str, snippets: List[str]) -> str:
+    def generate_answer(self, query: str, snippets: List[str]) -> Any:
         context = "\n\n".join(
             f"[Snippet {i + 1}]\n{snippet}"
             for i, snippet in enumerate(snippets)
@@ -117,10 +117,10 @@ class QwenModel:
 
 
 class Tokenizer:
-    def __init__(self):
+    def __init__(self) -> None:
         self.stemmer = Stemmer.Stemmer("english")
 
-    def tokenize(self, texts):
+    def tokenize(self, texts: List[str]) -> Any:
         return bm25s.tokenize(texts, stopwords="en", stemmer=self.stemmer)
 
 
@@ -130,11 +130,11 @@ class ChunkStore:
         self.index_path = self.processed_dir / "bm25_index"
         self.chunks_path = self.processed_dir / "chunks.json"
 
-    def load_chunks(self):
+    def load_chunks(self) -> Any:
         with open(self.chunks_path, "r") as f:
             return json.load(f)
 
-    def save_chunks(self, chunks):
+    def save_chunks(self, chunks: List[Dict[str, Any]]) -> None:
         with open(self.chunks_path, "w") as f:
             json.dump(chunks, f, indent=2)
 
@@ -144,7 +144,7 @@ class Retriever:
         self.store = store
         self.tokenizer = tokenizer
 
-    def retrieve(self, query: str, k: int):
+    def retrieve(self, query: str, k: int) -> List[Dict[str, Any]]:
         query_tokens = self.tokenizer.tokenize([query])
         all_chunks = self.store.load_chunks()
         bm25_index = bm25s.BM25.load(self.store.index_path)
@@ -160,14 +160,15 @@ class Chunker:
         self.project_root = project_root
         self.repo = repo
 
-    def process_files(self):
+    def process_files(self) -> List[Path]:
         files = []
         for file in self.repo.rglob("*"):
             if file.is_file():
                 files.append(file)
         return files
 
-    def recursive_chunking(self, text: str, file: Path, chunk_size=2000):
+    def recursive_chunking(self, text: str, file: Path,
+                           chunk_size: int = 2000) -> List[Dict[str, Any]]:
         text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=chunk_size,
             chunk_overlap=chunk_size // 10,
@@ -192,7 +193,8 @@ class Chunker:
             )
         return chunks
 
-    def python_chunking(self, source_code: str, file: Path, chunk_size=2000):
+    def python_chunking(self, source_code: str, file: Path,
+                        chunk_size: int = 2000) -> List[Dict[str, Any]]:
         tree = ast.parse(source_code)
 
         lines = source_code.splitlines(keepends=True)
@@ -203,7 +205,7 @@ class Chunker:
 
         chunks = []
 
-        def character_offset(lineno, col_offset):
+        def character_offset(lineno: Any, col_offset: Any) -> Any:
             line = lines[lineno - 1]
             prefix = line.encode("utf-8")[:col_offset].decode("utf-8")
             return line_offsets[lineno - 1] + len(prefix)
@@ -258,7 +260,8 @@ class Chunker:
 
         return chunks
 
-    def chunk_file(self, file: Path, max_chunk_size: int):
+    def chunk_file(self, file: Path,
+                   max_chunk_size: int) -> List[Dict[str, Any]]:
         if file.suffix in {".md", ".rst", ".txt"}:
             text = file.read_text(encoding="utf-8", errors="ignore")
             return self.recursive_chunking(text, file, max_chunk_size)
@@ -271,7 +274,7 @@ class Chunker:
 
 
 class RAGService:
-    def __init__(self):
+    def __init__(self) -> None:
         self.script_dir = Path(__file__).resolve().parent
         self.project_root = self.script_dir.parent
         self.repo = (self.project_root / "data/raw/vllm-0.10.1").resolve()
@@ -282,7 +285,7 @@ class RAGService:
         self.chunker = Chunker(self.project_root, self.repo)
         self.retriever = Retriever(self.store, self.tokenizer)
 
-    def index(self, max_chunk_size=2000):
+    def index(self, max_chunk_size: int = 2000) -> None:
         files = self.chunker.process_files()
 
         all_chunks = []
@@ -310,7 +313,7 @@ class RAGService:
         )
         print("BM25 index saved to data/processed/bm25_index.")
 
-    def search(self, query: str, k: int):
+    def search(self, query: str, k: int) -> List[MinimalSource]:
         results = self.retriever.retrieve(query, k)
         result_dict = []
         for result in results:
@@ -323,24 +326,21 @@ class RAGService:
             ))
         return result_dict
 
-    def search_dataset(self, dataset_path: Path, k: int, save_directory: Path):
+    def search_dataset(self, dataset_path: Path, k: int,
+                       save_directory: Path) -> StudentSearchResults:
         save_directory = Path(save_directory)
         with open(dataset_path, "r") as f:
             dataset = RagDataset.model_validate_json(f.read())
-
         questions = dataset.rag_questions
 
         search_results = []
-
         for item in questions:
             result = MinimalSearchResults(
                 question_id=item.question_id,
-                question=item.question,
+                question_str=item.question,
                 retrieved_sources=self.search(item.question, k),
             )
-
             search_results.append(result)
-
         full_results = StudentSearchResults(
             search_results=search_results,
             k=k,
@@ -353,7 +353,8 @@ class RAGService:
 
         return full_results
 
-    def get_snippets(self, chunks, sources):
+    def get_snippets(self, chunks: List[Dict[str, Any]],
+                     sources: List[MinimalSource]) -> List[str]:
         snippets = []
 
         for source in sources:
@@ -374,7 +375,7 @@ class RAGService:
 
         return snippets
 
-    def answer(self, query: str, k: int):
+    def answer(self, query: str, k: int) -> Any:
         self.model = QwenModel()
         search_results = self.search(query, k)
         chunks = self.store.load_chunks()
@@ -386,7 +387,7 @@ class RAGService:
         self,
         student_search_results_path: Path,
         save_directory: Path,
-    ):
+    ) -> StudentSearchResultsAndAnswer:
         self.model = QwenModel()
         with open(student_search_results_path, "r") as f:
             search_results = StudentSearchResults.model_validate_json(f.read())
@@ -405,14 +406,14 @@ class RAGService:
             )
 
             answer = self.model.generate_answer(
-                item.question,
+                item.question_str,
                 snippets,
             )
 
             answered_questions.append(
                 MinimalAnswer(
                     question_id=item.question_id,
-                    question=item.question,
+                    question_str=item.question_str,
                     retrieved_sources=item.retrieved_sources,
                     answer=answer,
                 )
@@ -439,13 +440,13 @@ class RAGService:
 
 
 class RAG:
-    def __init__(self):
+    def __init__(self) -> None:
         self.service = RAGService()
 
-    def index(self, max_chunk_size=2000):
+    def index(self, max_chunk_size: int = 2000) -> None:
         self.service.index(max_chunk_size=max_chunk_size)
 
-    def search(self, query: str, k: int):
+    def search(self, query: str, k: int) -> None:
         results = self.service.search(query, k)
         for idx, entry in enumerate(results):
             print(f"Result {idx + 1}:")
@@ -454,21 +455,29 @@ class RAG:
             print(f"Last Character Index: {entry.last_character_index}")
             print("-" * 40)
 
-    def search_dataset(self, dataset_path: Path, k: int, save_directory: Path):
-        self.service.search_dataset(dataset_path, k, save_directory)
+    def search_dataset(self, dataset_path: Path, k: int,
+                       save_directory: Path) -> None:
+        try:
+            self.service.search_dataset(dataset_path, k, save_directory)
+        except Exception as e:
+            print(f"An error occurred while searching the dataset: {e}")
 
-    def answer(self, query: str, k: int):
+    def answer(self, query: str, k: int) -> None:
         print(self.service.answer(query, k))
 
-    def answer_dataset(self, student_search_results_path: Path, save_directory: Path):
+    def answer_dataset(self, student_search_results_path: Path,
+                       save_directory: Path) -> None:
         try:
-            self.service.answer_dataset(student_search_results_path, save_directory)
+            self.service.answer_dataset(student_search_results_path,
+                                        save_directory)
         except Exception as e:
             print(f"An error occurred while answering the dataset: {e}")
-# export HF_HOME=/sgoinfre/$(whoami)/hf_cache
+
+
 """
+export HF_HOME=/sgoinfre/$(whoami)/hf_cache
 uv run python -m src index --max_chunk_size 2000
 uv run python -m src search_dataset --dataset_path data/datasets/UnansweredQuestions/dataset_docs_public.json --k 10 --save_directory data/output/search_results/UnansweredQuestions
-uv run python -m src evaluate_student_search_results --student_search_results_path data/output/search_results/UnansweredQuestions/dataset_docs_public.json --answered_questions_path data/datasets/AnsweredQuestions/dataset_docs_public.json --k 10 --max_context_length 2000
+./moulinette evaluate_student_search_results data/output/search_results/UnansweredQuestions/dataset_docs_public.json data/datasets/AnsweredQuestions/dataset_docs_public.json --k 10 --max_context_length 2000
 uv run python -m src answer_dataset --student_search_results_path data/output/search_results/UnansweredQuestions/dataset_docs_public.json --save_directory data/output/search_results_and_answer/UnansweredQuestions
 """
