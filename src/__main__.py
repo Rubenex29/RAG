@@ -1,5 +1,5 @@
 from pathlib import Path
-
+import sys
 import fire
 
 from .RAG import RAG
@@ -25,5 +25,17 @@ class CLI:
         self.service.answer_dataset(student_search_results_path, save_directory)
 
 
+VALID_COMMANDS = {
+    "answer",
+    "answer_dataset",
+    "index",
+    "search",
+    "search_dataset",
+}
+
 if __name__ == "__main__":
+    if len(sys.argv) > 1 and sys.argv[1] not in VALID_COMMANDS:
+        print(f"Error: Invalid command: {sys.argv[1]}")
+        sys.exit(1)
+
     fire.Fire(CLI())

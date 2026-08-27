@@ -1,5 +1,7 @@
 import ast
+import sys
 import json
+import numpy as np
 from pathlib import Path
 from pydantic import BaseModel, Field
 import uuid
@@ -64,7 +66,7 @@ class QwenModel:
 
     def generate_answer(self, query: str, snippets: List[str]) -> Any:
         context = "\n\n".join(
-            f"[Snippet {i + 1}]\n{snippet}"
+            f"[Snippet {i + 1}]\n{snippet[:500]}"
             for i, snippet in enumerate(snippets)
         )
 
@@ -131,8 +133,15 @@ class ChunkStore:
         self.chunks_path = self.processed_dir / "chunks.json"
 
     def load_chunks(self) -> Any:
-        with open(self.chunks_path, "r") as f:
-            return json.load(f)
+        try:
+            with open(self.chunks_path, "r") as f:
+                return json.load(f)
+        except FileNotFoundError:
+            print(f"Error: Chunks file '{self.chunks_path}' not found.")
+            sys.exit(1)
+        except json.JSONDecodeError as e:
+            print(f"Error decoding JSON from {self.chunks_path}: {e}")
+            sys.exit(1)
 
     def save_chunks(self, chunks: List[Dict[str, Any]]) -> None:
         with open(self.chunks_path, "w") as f:
@@ -147,8 +156,16 @@ class Retriever:
     def retrieve(self, query: str, k: int) -> List[Dict[str, Any]]:
         query_tokens = self.tokenizer.tokenize([query])
         all_chunks = self.store.load_chunks()
-        bm25_index = bm25s.BM25.load(self.store.index_path)
+        try:
+            bm25_index = bm25s.BM25.load(self.store.index_path)
+        except FileNotFoundError:
+            print(f"Error: Index file '{self.store.index_path}' not found.")
+            sys.exit(1)
         results, scores = bm25_index.retrieve(query_tokens, k=k)
+        # if all 0 means error in retrieval, return empty list
+        if np.all(scores == 0):
+            print("No relevant chunks found for the query.")
+            sys.exit(1)
         retrieved_chunks = []
         for chunk_id in results[0]:
             retrieved_chunks.append(all_chunks[chunk_id])
@@ -329,8 +346,16 @@ class RAGService:
     def search_dataset(self, dataset_path: Path, k: int,
                        save_directory: Path) -> StudentSearchResults:
         save_directory = Path(save_directory)
-        with open(dataset_path, "r") as f:
-            dataset = RagDataset.model_validate_json(f.read())
+        try:
+            with open(dataset_path, "r") as f:
+                dataset = RagDataset.model_validate_json(f.read())
+        except FileNotFoundError:
+            print(f"Error: File '{dataset_path}' not found.")
+            sys.exit(1)
+        except json.JSONDecodeError as e:
+            print(f"Error decoding JSON from {dataset_path}: {e}")
+            sys.exit(1)
+
         questions = dataset.rag_questions
 
         search_results = []
@@ -345,7 +370,7 @@ class RAGService:
             search_results=search_results,
             k=k,
         )
-        print("OUTPUT PATH:", save_directory / "dataset_docs_public.json")
+        print("OUTPUT PATH:", save_directory / "datasedocs_public.json")
         save_directory.mkdir(parents=True, exist_ok=True)
 
         with open(save_directory / "dataset_docs_public.json", "w") as f:
@@ -389,8 +414,15 @@ class RAGService:
         save_directory: Path,
     ) -> StudentSearchResultsAndAnswer:
         self.model = QwenModel()
-        with open(student_search_results_path, "r") as f:
-            search_results = StudentSearchResults.model_validate_json(f.read())
+        try:
+            with open(student_search_results_path, "r") as f:
+                search_results = StudentSearchResults.model_validate_json(f.read())
+        except FileNotFoundError:
+            print(f"Error: File '{student_search_results_path}' not found.")
+            sys.exit(1)
+        except json.JSONDecodeError as e:
+            print(f"Error decoding JSON from {student_search_results_path}: {e}")
+            sys.exit(1)
 
         chunks = self.store.load_chunks()
         answered_questions = []
@@ -439,14 +471,35 @@ class RAGService:
         return full_results
 
 
+def parse_k(k: int) -> None:
+    if not isinstance(k, int):
+        print(f"Error: k must be an integer, got {type(k).__name__}")
+        sys.exit(1)
+
+
+def path_to_str(name_path: str, path: str) -> None:
+    if not isinstance(path, str):
+        print(f"Error: {name_path} must be a string PAth, got {type(path).__name__}")
+        sys.exit(1)
+
+
 class RAG:
     def __init__(self) -> None:
         self.service = RAGService()
 
     def index(self, max_chunk_size: int = 2000) -> None:
+        if not isinstance(max_chunk_size, int):
+            print(f"Error: max_chunk_size must be an integer, got {type(max_chunk_size).__name__}")
+            sys.exit(1)
         self.service.index(max_chunk_size=max_chunk_size)
 
     def search(self, query: str, k: int) -> None:
+        if not isinstance(k, int):
+            print(f"Error: k must be an integer, got {type(k).__name__}")
+            sys.exit(1)
+        if not isinstance(query, str):
+            print(f"Error: query must be a string, got {type(query).__name__}")
+            sys.exit(1)
         results = self.service.search(query, k)
         for idx, entry in enumerate(results):
             print(f"Result {idx + 1}:")
@@ -457,21 +510,22 @@ class RAG:
 
     def search_dataset(self, dataset_path: Path, k: int,
                        save_directory: Path) -> None:
-        try:
-            self.service.search_dataset(dataset_path, k, save_directory)
-        except Exception as e:
-            print(f"An error occurred while searching the dataset: {e}")
+        if not isinstance(k, int):
+            print(f"Error: k must be an integer, got {type(k).__name__}")
+            sys.exit(1)
+        path_to_str("dataset_path", dataset_path)
+        path_to_str("save_directory", save_directory)
+        self.service.search_dataset(dataset_path, k, save_directory)
 
     def answer(self, query: str, k: int) -> None:
         print(self.service.answer(query, k))
 
     def answer_dataset(self, student_search_results_path: Path,
                        save_directory: Path) -> None:
-        try:
-            self.service.answer_dataset(student_search_results_path,
-                                        save_directory)
-        except Exception as e:
-            print(f"An error occurred while answering the dataset: {e}")
+        path_to_str("student_search_results_path", student_search_results_path)
+        path_to_str("save_directory", save_directory)
+        self.service.answer_dataset(student_search_results_path,
+                                    save_directory)
 
 
 """

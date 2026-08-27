@@ -11,5 +11,6 @@ dependencies = [
     "tqdm",
     "transformers",
     "torch",
-    "accelerate"
+    "accelerate",
+    "numpy"
 ]
