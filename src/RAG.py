@@ -105,7 +105,7 @@ class QwenModel:
 
         generated_ids = self.model.generate(
             **inputs,
-            max_new_tokens=150,
+            max_new_tokens=64,
         )
 
         output_ids = generated_ids[0][len(inputs.input_ids[0]):]
@@ -530,6 +530,7 @@ class RAG:
 
 """
 export HF_HOME=/sgoinfre/$(whoami)/hf_cache
+export UV_CACHE_DIR="/sgoinfre/$USER/uv_cache"
 uv run python -m src index --max_chunk_size 2000
 uv run python -m src search_dataset --dataset_path data/datasets/UnansweredQuestions/dataset_docs_public.json --k 10 --save_directory data/output/search_results/UnansweredQuestions
 ./moulinette evaluate_student_search_results data/output/search_results/UnansweredQuestions/dataset_docs_public.json data/datasets/AnsweredQuestions/dataset_docs_public.json --k 10 --max_context_length 2000
