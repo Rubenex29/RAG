@@ -416,12 +416,14 @@ class RAGService:
         self.model = QwenModel()
         try:
             with open(student_search_results_path, "r") as f:
-                search_results = StudentSearchResults.model_validate_json(f.read())
+                search_results = StudentSearchResults.model_validate_json(
+                    f.read())
         except FileNotFoundError:
             print(f"Error: File '{student_search_results_path}' not found.")
             sys.exit(1)
         except json.JSONDecodeError as e:
-            print(f"Error decoding JSON from {student_search_results_path}: {e}")
+            print("Error decoding JSON from" +
+                  f" {student_search_results_path}: {e}")
             sys.exit(1)
 
         chunks = self.store.load_chunks()
@@ -477,9 +479,10 @@ def parse_k(k: int) -> None:
         sys.exit(1)
 
 
-def path_to_str(name_path: str, path: str) -> None:
+def path_to_str(name_path: str, path: Path) -> None:
     if not isinstance(path, str):
-        print(f"Error: {name_path} must be a string PAth, got {type(path).__name__}")
+        print(f"Error: {name_path} must be a string PAth, got " +
+              f"{type(path).__name__}")
         sys.exit(1)
 
 
@@ -489,7 +492,8 @@ class RAG:
 
     def index(self, max_chunk_size: int = 2000) -> None:
         if not isinstance(max_chunk_size, int):
-            print(f"Error: max_chunk_size must be an integer, got {type(max_chunk_size).__name__}")
+            print("Error: max_chunk_size must be an integer, got " +
+                  f"{type(max_chunk_size).__name__}")
             sys.exit(1)
         self.service.index(max_chunk_size=max_chunk_size)
 
@@ -530,7 +534,7 @@ class RAG:
 
 """
 export HF_HOME=/sgoinfre/$(whoami)/hf_cache
-export UV_CACHE_DIR="/sgoinfre/$USER/uv_cache"
+export UV_CACHE_DIR=/sgoinfre/$USER/uv_cache
 uv run python -m src index --max_chunk_size 2000
 uv run python -m src search_dataset --dataset_path data/datasets/UnansweredQuestions/dataset_docs_public.json --k 10 --save_directory data/output/search_results/UnansweredQuestions
 ./moulinette evaluate_student_search_results data/output/search_results/UnansweredQuestions/dataset_docs_public.json data/datasets/AnsweredQuestions/dataset_docs_public.json --k 10 --max_context_length 2000
