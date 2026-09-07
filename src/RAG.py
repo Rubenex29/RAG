@@ -11,6 +11,8 @@ import Stemmer
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
+from sentence_transformers import SentenceTransformer
+import faiss
 import time
 
 
@@ -152,10 +154,18 @@ class Retriever:
     def __init__(self, store: ChunkStore, tokenizer: Tokenizer):
         self.store = store
         self.tokenizer = tokenizer
+        self.model = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')
+        self.chunks = self.store.load_chunks()
+        print(f"DEBUG: len(self.chunks) = {len(self.chunks)}")          # <-- novo
+        texts = [chunk["content"] for chunk in self.chunks]
+        self.doc_embeddings = self.model.encode(texts, normalize_embeddings=True)
+        dim = self.doc_embeddings.shape[1]
+        self.index = faiss.IndexFlatIP(dim)
+        self.index.add(np.array(self.doc_embeddings, dtype="float32"))
+        print(f"DEBUG: index.ntotal = {self.index.ntotal}")
 
     def retrieve(self, query: str, k: int) -> List[Dict[str, Any]]:
         query_tokens = self.tokenizer.tokenize([query])
-        all_chunks = self.store.load_chunks()
         try:
             bm25_index = bm25s.BM25.load(self.store.index_path)
         except FileNotFoundError:
@@ -168,8 +178,21 @@ class Retriever:
             sys.exit(1)
         retrieved_chunks = []
         for chunk_id in results[0]:
-            retrieved_chunks.append(all_chunks[chunk_id])
+            retrieved_chunks.append(self.chunks[chunk_id])
         return retrieved_chunks
+
+    def vector_retrieve(self, query: str, k: int) -> List[Dict[str, Any]]:
+        query_embedding = self.model.encode([query], normalize_embeddings=True)
+        scores, indices = self.index.search(np.array(query_embedding, dtype="float32"), k)
+        print(f"DEBUG: indices = {indices}")                             # <-- novo
+        print(f"DEBUG: scores = {scores}")
+        results = []
+        for idx, score in zip(indices[0], scores[0]):
+            if idx == -1:  # FAISS devolve -1 se não encontrar k resultados suficientes
+                continue
+            chunk = self.chunks[idx]  # self.chunks tem de ser a lista original com "content" + "metadata"
+            results.append(chunk)
+        return results
 
 
 class Chunker:
@@ -331,7 +354,7 @@ class RAGService:
         print("BM25 index saved to data/processed/bm25_index.")
 
     def search(self, query: str, k: int) -> List[MinimalSource]:
-        results = self.retriever.retrieve(query, k)
+        results = self.retriever.vector_retrieve(query, k)
         result_dict = []
         for result in results:
             first_char_index = result["metadata"]["first_character_index"]

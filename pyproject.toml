@@ -12,5 +12,7 @@ dependencies = [
     "transformers",
     "torch",
     "accelerate",
-    "numpy"
+    "numpy",
+    "sentence-transformers",
+    "faiss-cpu"
 ]
