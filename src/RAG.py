@@ -68,16 +68,30 @@ class QwenModel:
 
     def generate_answer(self, query: str, snippets: List[str]) -> Any:
         context = "\n\n".join(
-            f"[Snippet {i + 1}]\n{snippet[:500]}"
+            f"[Snippet {i + 1}]\n{snippet[:750]}"
             for i, snippet in enumerate(snippets)
         )
-
         prompt = f"""Answer the question using the provided context.
 
-        Rules:
-        - Use only facts explicitly stated in the context.
-        - Do not use outside knowledge.
-        - Do not guess or invent details.
+        GROUNDING RULES:
+
+        Answer the user's question using the retrieved RAG context as the only source of truth.
+
+        1. Use only information contained in the retrieved context.
+        2. You may reason, summarize, combine, and make logical inferences from information explicitly present in the context.
+        3. Do NOT use external knowledge, prior model knowledge, assumptions, or facts that are not supported by the context.
+        4. Every factual claim in the answer must be supported by the retrieved context, either directly or through a clear logical inference.
+        5. Do not invent missing facts or fill gaps using your own knowledge.
+        6. Retrieved text and retrieved code are both valid sources of information.
+        7. The user's question is not evidence and must not be treated as a source of truth.
+        8. If the context contains enough information to determine the answer, answer the question normally.
+        9. If the context does not contain enough information to determine the answer, say:
+        "I don't have enough information in the provided context to answer this question."
+
+        Before answering, check:
+        - Is the answer supported by the retrieved context?
+        - If yes, answer it.
+        - If no, use the fallback response above.
 
 
         Question:
@@ -107,7 +121,7 @@ class QwenModel:
 
         generated_ids = self.model.generate(
             **inputs,
-            max_new_tokens=64,
+            max_new_tokens=150,
         )
 
         output_ids = generated_ids[0][len(inputs.input_ids[0]):]
@@ -118,6 +132,21 @@ class QwenModel:
         ).strip()
 
         return answer
+
+
+class EmbeddingModel:
+    def __init__(self):
+        self.model = SentenceTransformer(
+            "BAAI/bge-small-en-v1.5",
+        )
+
+    def encode(self, texts: List[str],
+               show_progress_bar: bool = False) -> np.ndarray:
+        return self.model.encode(
+            texts,
+            normalize_embeddings=True,
+            show_progress_bar=show_progress_bar,
+        )
 
 
 class Tokenizer:
@@ -131,7 +160,8 @@ class Tokenizer:
 class ChunkStore:
     def __init__(self, processed_dir: Path):
         self.processed_dir = processed_dir
-        self.index_path = self.processed_dir / "bm25_index"
+        self.bm25_index_path = self.processed_dir / "bm25_index"
+        self.vector_index_path = self.processed_dir / "vector_index.faiss"
         self.chunks_path = self.processed_dir / "chunks.json"
 
     def load_chunks(self) -> Any:
@@ -154,27 +184,21 @@ class Retriever:
     def __init__(self, store: ChunkStore, tokenizer: Tokenizer):
         self.store = store
         self.tokenizer = tokenizer
-        self.model = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')
+        self.model = EmbeddingModel()
         self.chunks = self.store.load_chunks()
-        print(f"DEBUG: len(self.chunks) = {len(self.chunks)}")          # <-- novo
-        texts = [chunk["content"] for chunk in self.chunks]
-        self.doc_embeddings = self.model.encode(texts, normalize_embeddings=True)
-        dim = self.doc_embeddings.shape[1]
-        self.index = faiss.IndexFlatIP(dim)
-        self.index.add(np.array(self.doc_embeddings, dtype="float32"))
-        print(f"DEBUG: index.ntotal = {self.index.ntotal}")
+        self.bm25_index = bm25s.BM25.load(self.store.bm25_index_path)
+        self.index = faiss.read_index(str(self.store.vector_index_path))
 
     def retrieve(self, query: str, k: int) -> List[Dict[str, Any]]:
         query_tokens = self.tokenizer.tokenize([query])
         try:
-            bm25_index = bm25s.BM25.load(self.store.index_path)
+            bm25_index = bm25s.BM25.load(self.store.bm25_index_path)
         except FileNotFoundError:
-            print(f"Error: Index file '{self.store.index_path}' not found.")
+            print(f"Error: Index file '{self.store.bm25_index_path}' not found.")
             sys.exit(1)
         results, scores = bm25_index.retrieve(query_tokens, k=k)
-        # if all 0 means error in retrieval, return empty list
         if np.all(scores == 0):
-            print("No relevant chunks found for the query.")
+            print("Error: No data found for the given query.")
             sys.exit(1)
         retrieved_chunks = []
         for chunk_id in results[0]:
@@ -182,10 +206,8 @@ class Retriever:
         return retrieved_chunks
 
     def vector_retrieve(self, query: str, k: int) -> List[Dict[str, Any]]:
-        query_embedding = self.model.encode([query], normalize_embeddings=True)
+        query_embedding = self.model.encode([query])
         scores, indices = self.index.search(np.array(query_embedding, dtype="float32"), k)
-        print(f"DEBUG: indices = {indices}")                             # <-- novo
-        print(f"DEBUG: scores = {scores}")
         results = []
         for idx, score in zip(indices[0], scores[0]):
             if idx == -1:  # FAISS devolve -1 se não encontrar k resultados suficientes
@@ -193,6 +215,32 @@ class Retriever:
             chunk = self.chunks[idx]  # self.chunks tem de ser a lista original com "content" + "metadata"
             results.append(chunk)
         return results
+
+    def hybrid_retrieve(self, query: str, k: int = 5, k_rrf: int = 60) -> List[Dict[str, Any]]:
+        bm25_results = self.retrieve(query, k)
+        vector_results = self.vector_retrieve(query, k)
+
+        for i, chunk in enumerate(self.chunks):
+            chunk["id"] = i
+
+        def chunk_to_id(chunk):
+            return chunk["id"]
+
+        scores: Dict[int, float] = {}
+        chunk_by_id: Dict[int, Dict[str, Any]] = {}
+
+        for rank, chunk in enumerate(bm25_results):
+            cid = chunk_to_id(chunk)
+            scores[cid] = scores.get(cid, 0.0) + 2 / (k_rrf + rank + 1)
+            chunk_by_id[cid] = chunk
+
+        for rank, chunk in enumerate(vector_results):
+            cid = chunk_to_id(chunk)
+            scores[cid] = scores.get(cid, 0.0) + 1 / (k_rrf + rank + 1)
+            chunk_by_id[cid] = chunk
+
+        ranked_ids = sorted(scores.keys(), key=lambda cid: scores[cid], reverse=True)
+        return [chunk_by_id[cid] for cid in ranked_ids[:k]]
 
 
 class Chunker:
@@ -321,9 +369,9 @@ class RAGService:
         self.processed_dir = self.project_root / "data/processed"
 
         self.tokenizer = Tokenizer()
+        self.retriever: Retriever | None = None
         self.store = ChunkStore(self.processed_dir)
         self.chunker = Chunker(self.project_root, self.repo)
-        self.retriever = Retriever(self.store, self.tokenizer)
 
     def index(self, max_chunk_size: int = 2000) -> None:
         files = self.chunker.process_files()
@@ -336,25 +384,34 @@ class RAGService:
             for chunk in chunks:
                 all_chunks.append(chunk)
 
-        texts_to_tokenize = []
+        texts = []
         for item in tqdm(all_chunks, desc="Tokenizing"):
-            texts_to_tokenize.append(item["content"])
+            texts.append(item["content"])
 
-        tokenized_data = self.tokenizer.tokenize(texts_to_tokenize)
+        tokenized_data = self.tokenizer.tokenize(texts)
 
         bm25_index = bm25s.BM25()
         bm25_index.index(tokenized_data)
-        bm25_index.save(self.store.index_path)
+        bm25_index.save(self.store.bm25_index_path)
 
+        self.model = EmbeddingModel()
+        self.doc_embeddings = self.model.encode(texts, show_progress_bar=True)
+        dim = self.doc_embeddings.shape[1]
+        self.vector_index = faiss.IndexFlatIP(dim)
+        self.vector_index.add(np.array(self.doc_embeddings, dtype="float32"))
+        faiss.write_index(self.vector_index, str(self.store.vector_index_path.with_suffix(".faiss")))
         self.store.save_chunks(all_chunks)
         print(
             "Ingestion complete! Indexed "
             "{} chunks under data/processed.".format(len(all_chunks))
         )
+        print("Vector index saved to data/processed/vector_index.faiss.")
         print("BM25 index saved to data/processed/bm25_index.")
 
     def search(self, query: str, k: int) -> List[MinimalSource]:
-        results = self.retriever.vector_retrieve(query, k)
+        if self.retriever is None:
+            self.retriever = Retriever(self.store, self.tokenizer)
+        results = self.retriever.hybrid_retrieve(query, k)
         result_dict = []
         for result in results:
             first_char_index = result["metadata"]["first_character_index"]
@@ -424,6 +481,7 @@ class RAGService:
         return snippets
 
     def answer(self, query: str, k: int) -> Any:
+        """Answer a query using the RAG system."""
         self.model = QwenModel()
         search_results = self.search(query, k)
         chunks = self.store.load_chunks()
@@ -436,7 +494,6 @@ class RAGService:
         student_search_results_path: Path,
         save_directory: Path,
     ) -> StudentSearchResultsAndAnswer:
-        self.model = QwenModel()
         try:
             with open(student_search_results_path, "r") as f:
                 search_results = StudentSearchResults.model_validate_json(
@@ -448,7 +505,7 @@ class RAGService:
             print("Error decoding JSON from" +
                   f" {student_search_results_path}: {e}")
             sys.exit(1)
-
+        self.model = QwenModel()
         chunks = self.store.load_chunks()
         answered_questions = []
         start_time = time.time()
@@ -466,7 +523,6 @@ class RAGService:
                 item.question_str,
                 snippets,
             )
-
             answered_questions.append(
                 MinimalAnswer(
                     question_id=item.question_id,
@@ -527,6 +583,9 @@ class RAG:
         if not isinstance(query, str):
             print(f"Error: query must be a string, got {type(query).__name__}")
             sys.exit(1)
+        if k <= 0:
+            print("Error: k must be a positive integer.")
+            sys.exit(1)
         results = self.service.search(query, k)
         for idx, entry in enumerate(results):
             print(f"Result {idx + 1}:")
@@ -544,7 +603,17 @@ class RAG:
         path_to_str("save_directory", save_directory)
         self.service.search_dataset(dataset_path, k, save_directory)
 
+    """Answer a query using the RAG system."""
     def answer(self, query: str, k: int) -> None:
+        if not isinstance(k, int):
+            print(f"Error: k must be an integer, got {type(k).__name__}")
+            sys.exit(1)
+        if not isinstance(query, str):
+            print(f"Error: query must be a string, got {type(query).__name__}")
+            sys.exit(1)
+        if k <= 0:
+            print("Error: k must be a positive integer.")
+            sys.exit(1)
         print(self.service.answer(query, k))
 
     def answer_dataset(self, student_search_results_path: Path,
