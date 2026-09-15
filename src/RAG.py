@@ -8,12 +8,12 @@ import uuid
 from typing import Any, Dict, List
 import bm25s
 import Stemmer
-from langchain_text_splitters import RecursiveCharacterTextSplitter
 from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from sentence_transformers import SentenceTransformer
 import faiss
 import time
+import hashlib
 
 
 class MinimalSource(BaseModel):
@@ -38,7 +38,7 @@ class RagDataset(BaseModel):
 
 class MinimalSearchResults(BaseModel):
     question_id: str
-    question_str: str
+    question: str
     retrieved_sources: List[MinimalSource]
 
 
@@ -56,6 +56,10 @@ class StudentSearchResultsAndAnswer(BaseModel):
     k: int
 
 
+def hash_file(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
 class QwenModel:
     def __init__(self, model_name: str = "Qwen/Qwen3-0.6B"):
         self.model_name = model_name
@@ -68,31 +72,19 @@ class QwenModel:
 
     def generate_answer(self, query: str, snippets: List[str]) -> Any:
         context = "\n\n".join(
-            f"[Snippet {i + 1}]\n{snippet[:750]}"
+            f"[Snippet {i + 1}]\n{snippet[:600]}"
             for i, snippet in enumerate(snippets)
         )
         prompt = f"""Answer the question using the provided context.
 
-        GROUNDING RULES:
+        Use the context as your main source of information. You may combine information
+        from different parts of the context and make reasonable logical inferences.
 
-        Answer the user's question using the retrieved RAG context as the only source of truth.
+        Do not introduce facts that are unrelated to or unsupported by the context.
+        If the context does not contain enough information to answer the question,
+        say: "I don't have enough information in the provided context to answer this question."
 
-        1. Use only information contained in the retrieved context.
-        2. You may reason, summarize, combine, and make logical inferences from information explicitly present in the context.
-        3. Do NOT use external knowledge, prior model knowledge, assumptions, or facts that are not supported by the context.
-        4. Every factual claim in the answer must be supported by the retrieved context, either directly or through a clear logical inference.
-        5. Do not invent missing facts or fill gaps using your own knowledge.
-        6. Retrieved text and retrieved code are both valid sources of information.
-        7. The user's question is not evidence and must not be treated as a source of truth.
-        8. If the context contains enough information to determine the answer, answer the question normally.
-        9. If the context does not contain enough information to determine the answer, say:
-        "I don't have enough information in the provided context to answer this question."
-
-        Before answering, check:
-        - Is the answer supported by the retrieved context?
-        - If yes, answer it.
-        - If no, use the fallback response above.
-
+        Answer the question directly and concisely.
 
         Question:
         {query}
@@ -217,8 +209,9 @@ class Retriever:
         return results
 
     def hybrid_retrieve(self, query: str, k: int = 5, k_rrf: int = 60) -> List[Dict[str, Any]]:
-        bm25_results = self.retrieve(query, k)
-        vector_results = self.vector_retrieve(query, k)
+        candidate_k = min(max(k * 4, 20), len(self.chunks))
+        bm25_results = self.retrieve(query, candidate_k)
+        vector_results = self.vector_retrieve(query, candidate_k)
 
         for i, chunk in enumerate(self.chunks):
             chunk["id"] = i
@@ -240,7 +233,9 @@ class Retriever:
             chunk_by_id[cid] = chunk
 
         ranked_ids = sorted(scores.keys(), key=lambda cid: scores[cid], reverse=True)
-        return [chunk_by_id[cid] for cid in ranked_ids[:k]]
+        ranked_chunks = [chunk_by_id[cid] for cid in ranked_ids]
+
+        return ranked_chunks[:k]
 
 
 class Chunker:
@@ -251,26 +246,23 @@ class Chunker:
     def process_files(self) -> List[Path]:
         files = []
         for file in self.repo.rglob("*"):
-            if file.is_file():
+            if file.is_file() and file.suffix in {".md", ".rst", ".txt", ".py"}:
                 files.append(file)
         return files
 
     def recursive_chunking(self, text: str, file: Path,
                            chunk_size: int = 2000) -> List[Dict[str, Any]]:
-        text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=chunk_size,
-            chunk_overlap=chunk_size // 10,
-            separators=["\n\n", "\n", ". ", "! ", "? ", " ", ""],
-            add_start_index=True,
-        )
         chunks = []
-        docs = text_splitter.create_documents([text])
-        for doc in docs:
-            start: int = doc.metadata["start_index"]
-            end: int = start + len(doc.page_content)
+        stride = max(1, int(chunk_size * 0.45))
+        for start in range(0, len(text), stride):
+            content = text[start:start + chunk_size]
+            if not content:
+                continue
+            end = start + len(content)
             chunks.append(
                 {
-                    "content": doc.page_content,
+                    "content": content,
+                    "hash": hash_file(file),
                     "metadata": {
                         "type": "text",
                         "file_path": str(file.relative_to(self.project_root)),
@@ -292,6 +284,11 @@ class Chunker:
             line_offsets.append(line_offsets[-1] + len(line))
 
         chunks = []
+        parents = {
+            child: node
+            for node in ast.walk(tree)
+            for child in ast.iter_child_nodes(node)
+        }
 
         def character_offset(lineno: Any, col_offset: Any) -> Any:
             line = lines[lineno - 1]
@@ -310,11 +307,23 @@ class Chunker:
             if code is None:
                 continue
 
+            class_names = []
+            parent = parents.get(node)
+            while parent is not None:
+                if isinstance(parent, ast.ClassDef):
+                    class_names.append(parent.name)
+                parent = parents.get(parent)
+            context = "\n".join(
+                f"class {name}" for name in reversed(class_names)
+            )
+            indexed_code = f"{context}\n{code}" if context else code
+
             # Function fits in one chunk
-            if len(code) <= MAX_CHUNK_LENGTH:
+            if len(indexed_code) <= MAX_CHUNK_LENGTH:
                 chunks.append(
                     {
-                        "content": code,
+                        "content": indexed_code,
+                        "hash": hash_file(file),
                         "metadata": {
                             "type": "function",
                             "file_path": file_path,
@@ -333,10 +342,14 @@ class Chunker:
             start = character_offset(node.lineno, node.col_offset)
             for chunk_start in range(0, len(code), MAX_CHUNK_LENGTH):
                 chunk_end = min(chunk_start + MAX_CHUNK_LENGTH, len(code))
+                chunk_content = code[chunk_start:chunk_end]
+                if context:
+                    chunk_content = f"{context}\n{chunk_content}"
 
                 chunks.append(
                     {
-                        "content": code[chunk_start:chunk_end],
+                        "content": chunk_content,
+                        "hash": hash_file(file),
                         "metadata": {
                             "type": "function",
                             "file_path": file_path,
@@ -375,7 +388,6 @@ class RAGService:
 
     def index(self, max_chunk_size: int = 2000) -> None:
         files = self.chunker.process_files()
-
         all_chunks = []
         for _, file in tqdm(
             enumerate(files), total=len(files), desc="Chunking"
@@ -425,6 +437,7 @@ class RAGService:
 
     def search_dataset(self, dataset_path: Path, k: int,
                        save_directory: Path) -> StudentSearchResults:
+        dataset_path = Path(dataset_path)
         save_directory = Path(save_directory)
         try:
             with open(dataset_path, "r") as f:
@@ -442,7 +455,7 @@ class RAGService:
         for item in questions:
             result = MinimalSearchResults(
                 question_id=item.question_id,
-                question_str=item.question,
+                question=item.question,
                 retrieved_sources=self.search(item.question, k),
             )
             search_results.append(result)
@@ -450,10 +463,13 @@ class RAGService:
             search_results=search_results,
             k=k,
         )
-        print("OUTPUT PATH:", save_directory / "datasedocs_public.json")
         save_directory.mkdir(parents=True, exist_ok=True)
 
-        with open(save_directory / "dataset_docs_public.json", "w") as f:
+        output_name = dataset_path.name.replace("_private", "_public")
+        output_path = save_directory / output_name
+        print("OUTPUT PATH:", output_path)
+
+        with open(output_path, "w") as f:
             json.dump(full_results.model_dump(), f, indent=2)
 
         return full_results
@@ -513,6 +529,7 @@ class RAGService:
         for item in tqdm(
             search_results.search_results,
             desc="Answering questions",
+            dynamic_ncols=True,
         ):
             snippets = self.get_snippets(
                 chunks,
@@ -520,13 +537,13 @@ class RAGService:
             )
 
             answer = self.model.generate_answer(
-                item.question_str,
+                item.question,
                 snippets,
             )
             answered_questions.append(
                 MinimalAnswer(
                     question_id=item.question_id,
-                    question_str=item.question_str,
+                    question=item.question,
                     retrieved_sources=item.retrieved_sources,
                     answer=answer,
                 )
