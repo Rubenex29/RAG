@@ -131,11 +131,14 @@ class EmbeddingModel:
         self.model = SentenceTransformer(
             "BAAI/bge-small-en-v1.5",
         )
+        self.model.max_seq_length = 450
 
     def encode(self, texts: List[str],
-               show_progress_bar: bool = False) -> np.ndarray:
+               show_progress_bar: bool = False,
+               batch_size: int = 64) -> np.ndarray:
         return self.model.encode(
             texts,
+            batch_size=batch_size,
             normalize_embeddings=True,
             show_progress_bar=show_progress_bar,
         )
@@ -155,6 +158,8 @@ class ChunkStore:
         self.bm25_index_path = self.processed_dir / "bm25_index"
         self.vector_index_path = self.processed_dir / "vector_index.faiss"
         self.chunks_path = self.processed_dir / "chunks.json"
+        self.embeddings_path = self.processed_dir / "embeddings.npz"
+        self.manifest_path = self.processed_dir / "manifest.json"
 
     def load_chunks(self) -> Any:
         try:
@@ -170,6 +175,19 @@ class ChunkStore:
     def save_chunks(self, chunks: List[Dict[str, Any]]) -> None:
         with open(self.chunks_path, "w") as f:
             json.dump(chunks, f, indent=2)
+
+    def load_embeddings(self) -> Dict[str, np.ndarray]:
+        if not self.embeddings_path.exists():
+            return {}
+        data = np.load(self.embeddings_path, allow_pickle=False)
+        keys = data["keys"].tolist()
+        vectors = data["vectors"]
+        return {key: vector for key, vector in zip(keys, vectors)}
+
+    def save_embeddings(self, embeddings: Dict[str, np.ndarray]) -> None:
+        keys = list(embeddings)
+        vectors = np.asarray([embeddings[key] for key in keys], dtype="float32")
+        np.savez(self.embeddings_path, keys=np.asarray(keys), vectors=vectors)
 
 
 class Retriever:
@@ -243,11 +261,64 @@ class Chunker:
         self.project_root = project_root
         self.repo = repo
 
-    def process_files(self) -> List[Path]:
+    def process_files(self, chunk_path: Path) -> List[Path]:
         files = []
-        for file in self.repo.rglob("*"):
-            if file.is_file() and file.suffix in {".md", ".rst", ".txt", ".py"}:
-                files.append(file)
+        manifest_path = chunk_path.with_name("manifest.json")
+        old_manifest = {}
+        if manifest_path.exists():
+            with open(manifest_path, "r") as f:
+                old_manifest = json.load(f)
+        elif chunk_path.exists():
+            with open(chunk_path, "r") as f:
+                old_chunks = json.load(f)
+            if old_chunks and all("hash" in chunk for chunk in old_chunks):
+                old_manifest = {
+                    chunk["metadata"]["file_path"]: chunk["hash"]
+                    for chunk in old_chunks
+                }
+            else:
+                old_manifest = {}
+
+        current_files = [
+            file for file in self.repo.rglob("*")
+            if file.is_file()
+            and file.suffix in {".md", ".rst", ".txt", ".py"}
+        ]
+        current_manifest = {
+            str(file.relative_to(self.project_root)): hash_file(file)
+            for file in current_files
+        }
+
+        if chunk_path.exists():
+            with open(chunk_path, "r") as f:
+                chunks = json.load(f)
+        else:
+            chunks = []
+        if chunks and any("hash" not in chunk for chunk in chunks):
+            chunks = []
+        if not chunks:
+            old_manifest = {}
+
+        changed_paths = {
+            path for path, digest in current_manifest.items()
+            if old_manifest.get(path) != digest
+        }
+        deleted_paths = set(old_manifest) - set(current_manifest)
+        stale_paths = changed_paths | deleted_paths
+        if stale_paths:
+            chunks = [
+                chunk for chunk in chunks
+                if chunk["metadata"]["file_path"] not in stale_paths
+            ]
+
+        files = [
+            file for file in current_files
+            if str(file.relative_to(self.project_root)) in changed_paths
+        ]
+        with open(chunk_path, "w") as f:
+            json.dump(chunks, f, indent=2)
+        with open(manifest_path, "w") as f:
+            json.dump(current_manifest, f, indent=2)
         return files
 
     def recursive_chunking(self, text: str, file: Path,
@@ -387,38 +458,97 @@ class RAGService:
         self.chunker = Chunker(self.project_root, self.repo)
 
     def index(self, max_chunk_size: int = 2000) -> None:
-        files = self.chunker.process_files()
-        all_chunks = []
+        self.processed_dir.mkdir(parents=True, exist_ok=True)
+        chunks_path = self.processed_dir / "chunks.json"
+        first_index = not chunks_path.exists()
+        files = self.chunker.process_files(chunks_path)
+        # Load chunks that were NOT changed
+        if chunks_path.exists():
+            with open(chunks_path, "r") as f:
+                all_chunks = json.load(f)
+        else:
+            all_chunks = []
+        if not files and all_chunks and self.store.embeddings_path.exists():
+            print("Index is already up to date; all chunks and embeddings are cached.")
+            return
+        if not all_chunks:
+            first_index = True
+        # Add new chunks from changed/new files
+        new_chunk_count = 0
         for _, file in tqdm(
-            enumerate(files), total=len(files), desc="Chunking"
+            enumerate(files),
+            total=len(files),
+            desc="Indexing files" if first_index else "Reindexing files",
         ):
             chunks = self.chunker.chunk_file(file, max_chunk_size)
+            new_chunk_count += len(chunks)
             for chunk in chunks:
                 all_chunks.append(chunk)
-
+        action = "Indexed" if first_index else "Reindexed"
+        print(
+            f"{action} {len(files)} files and generated "
+            f"{new_chunk_count} new chunks."
+        )
         texts = []
         for item in tqdm(all_chunks, desc="Tokenizing"):
             texts.append(item["content"])
-
         tokenized_data = self.tokenizer.tokenize(texts)
-
         bm25_index = bm25s.BM25()
         bm25_index.index(tokenized_data)
         bm25_index.save(self.store.bm25_index_path)
 
-        self.model = EmbeddingModel()
-        self.doc_embeddings = self.model.encode(texts, show_progress_bar=True)
+        def chunk_key(chunk: Dict[str, Any]) -> str:
+            metadata = chunk["metadata"]
+            return "|".join(
+                [
+                    chunk["hash"],
+                    metadata["file_path"],
+                    str(metadata["first_character_index"]),
+                    str(metadata["last_character_index"]),
+                ]
+            )
+
+        embedding_cache = self.store.load_embeddings()
+        missing_chunks = [
+            chunk for chunk in all_chunks
+            if chunk_key(chunk) not in embedding_cache
+        ]
+        if missing_chunks:
+            self.model = EmbeddingModel()
+            new_embeddings = self.model.encode(
+                [chunk["content"] for chunk in missing_chunks],
+                show_progress_bar=True,
+                batch_size=64,
+            )
+            for chunk, embedding in zip(missing_chunks, new_embeddings):
+                embedding_cache[chunk_key(chunk)] = embedding
+
+        self.doc_embeddings = np.asarray(
+            [embedding_cache[chunk_key(chunk)] for chunk in all_chunks],
+            dtype="float32",
+        )
+        self.store.save_embeddings(
+            {chunk_key(chunk): embedding_cache[chunk_key(chunk)]
+             for chunk in all_chunks}
+        )
         dim = self.doc_embeddings.shape[1]
         self.vector_index = faiss.IndexFlatIP(dim)
-        self.vector_index.add(np.array(self.doc_embeddings, dtype="float32"))
-        faiss.write_index(self.vector_index, str(self.store.vector_index_path.with_suffix(".faiss")))
+        self.vector_index.add(
+            np.array(self.doc_embeddings, dtype="float32")
+        )
+        faiss.write_index(
+            self.vector_index,
+            str(self.store.vector_index_path.with_suffix(".faiss"))
+        )
         self.store.save_chunks(all_chunks)
         print(
             "Ingestion complete! Indexed "
             "{} chunks under data/processed.".format(len(all_chunks))
         )
+
         print("Vector index saved to data/processed/vector_index.faiss.")
         print("BM25 index saved to data/processed/bm25_index.")
+
 
     def search(self, query: str, k: int) -> List[MinimalSource]:
         if self.retriever is None:
