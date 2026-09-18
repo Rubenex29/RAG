@@ -127,7 +127,7 @@ class QwenModel:
 
 
 class EmbeddingModel:
-    def __init__(self):
+    def __init__(self) -> None:
         self.model = SentenceTransformer(
             "BAAI/bge-small-en-v1.5",
         )
@@ -549,8 +549,21 @@ class RAGService:
         print("Vector index saved to data/processed/vector_index.faiss.")
         print("BM25 index saved to data/processed/bm25_index.")
 
-
     def search(self, query: str, k: int) -> List[MinimalSource]:
+        answer_path = self.processed_dir / "search_cache.json"
+        # lets see if the query is already in the cache
+        # but we  need to cache if k is different, so we will cache the results for each k separately
+        cache_key = query + f"__k={k}"
+        if answer_path.exists():
+            with open(answer_path, "r") as f:
+                try:
+                    existing_results = json.load(f)
+                except json.JSONDecodeError:
+                    existing_results = {}
+            if cache_key in existing_results:
+                print(f"Cache hit for query: '{query}' with k={k}")
+                return [MinimalSource(**result) for result in existing_results[cache_key]]
+
         if self.retriever is None:
             self.retriever = Retriever(self.store, self.tokenizer)
         results = self.retriever.hybrid_retrieve(query, k)
@@ -563,6 +576,22 @@ class RAGService:
                 first_character_index=first_char_index,
                 last_character_index=last_char_index,
             ))
+        # i wanna cache results in a json file in the processed dir
+        answer_path = self.processed_dir / "search_cache.json"
+        # before writing, check if the file exists and load it, then update it with the new results
+        if answer_path.exists():
+            with open(answer_path, "r") as f:
+                try:
+                    existing_results = json.load(f)
+                except json.JSONDecodeError:
+                    existing_results = {}
+        else:
+            existing_results = {}
+        # append k to the query to differentiate cache entries
+        cache_key = query + f"__k={k}"
+        existing_results[cache_key] = [result.dict() for result in result_dict]
+        with open(answer_path, "w") as f:
+            json.dump(existing_results, f, indent=2)
         return result_dict
 
     def search_dataset(self, dataset_path: Path, k: int,
