@@ -5257,5 +5257,84 @@
       "first_character_index": 1332,
       "last_character_index": 1780
     }
+  ],
+  "How do I install vLLM?__k=5": [
+    {
+      "file_path": "data/raw/vllm-0.10.1/docs/getting_started/quickstart.md",
+      "first_character_index": 0,
+      "last_character_index": 2000
+    },
+    {
+      "file_path": "data/raw/vllm-0.10.1/docs/getting_started/installation/cpu/build.inc.md",
+      "first_character_index": 0,
+      "last_character_index": 1540
+    },
+    {
+      "file_path": "data/raw/vllm-0.10.1/docs/deployment/frameworks/skypilot.md",
+      "first_character_index": 900,
+      "last_character_index": 2900
+    },
+    {
+      "file_path": "data/raw/vllm-0.10.1/docs/getting_started/installation/gpu/rocm.inc.md",
+      "first_character_index": 3600,
+      "last_character_index": 5600
+    },
+    {
+      "file_path": "data/raw/vllm-0.10.1/docs/deployment/integrations/kubeai.md",
+      "first_character_index": 0,
+      "last_character_index": 765
+    }
+  ],
+  "what is a RAG__k=10": [
+    {
+      "file_path": "data/raw/vllm-0.10.1/docs/models/pooling_models.md",
+      "first_character_index": 3600,
+      "last_character_index": 5600
+    },
+    {
+      "file_path": "data/raw/vllm-0.10.1/docs/models/pooling_models.md",
+      "first_character_index": 4500,
+      "last_character_index": 6500
+    },
+    {
+      "file_path": "data/raw/vllm-0.10.1/tests/entrypoints/test_chat_utils.py",
+      "first_character_index": 14156,
+      "last_character_index": 15274
+    },
+    {
+      "file_path": "data/raw/vllm-0.10.1/tests/entrypoints/test_chat_utils.py",
+      "first_character_index": 25049,
+      "last_character_index": 25347
+    },
+    {
+      "file_path": "data/raw/vllm-0.10.1/tests/entrypoints/test_chat_utils.py",
+      "first_character_index": 21467,
+      "last_character_index": 23046
+    },
+    {
+      "file_path": "data/raw/vllm-0.10.1/benchmarks/sonnet.txt",
+      "first_character_index": 1800,
+      "last_character_index": 3800
+    },
+    {
+      "file_path": "data/raw/vllm-0.10.1/tests/entrypoints/test_chat_utils.py",
+      "first_character_index": 23049,
+      "last_character_index": 25049
+    },
+    {
+      "file_path": "data/raw/vllm-0.10.1/vllm/multimodal/base.py",
+      "first_character_index": 1333,
+      "last_character_index": 3333
+    },
+    {
+      "file_path": "data/raw/vllm-0.10.1/tests/entrypoints/test_chat_utils.py",
+      "first_character_index": 10590,
+      "last_character_index": 11596
+    },
+    {
+      "file_path": "data/raw/vllm-0.10.1/tests/models/multimodal/generation/test_mllama.py",
+      "first_character_index": 20556,
+      "last_character_index": 21495
+    }
   ]
 }

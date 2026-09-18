@@ -1,4 +1,5 @@
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field
 
 from .RAG import RAG
@@ -17,7 +18,7 @@ def health():
     return {"status": "ok"}
 
 
-@app.post("/search")
+@app.post("/search", response_class=PlainTextResponse)
 def search(payload: QueryRequest):
     try:
         results = rag.service.search(payload.query, payload.k)
@@ -32,19 +33,15 @@ def search(payload: QueryRequest):
                     "-" * 40,
                 ]
             )
-        return print_lines
+        return "\n".join(print_lines)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
-@app.post("/answer")
+@app.post("/answer", response_class=PlainTextResponse)
 def answer(payload: QueryRequest):
     try:
         answer = rag.service.answer(payload.query, payload.k)
-        return {
-            "query": payload.query,
-            "k": payload.k,
-            "answer": answer,
-        }
+        return answer
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc

@@ -561,7 +561,6 @@ class RAGService:
                 except json.JSONDecodeError:
                     existing_results = {}
             if cache_key in existing_results:
-                print(f"Cache hit for query: '{query}' with k={k}")
                 return [MinimalSource(**result) for result in existing_results[cache_key]]
 
         if self.retriever is None:
