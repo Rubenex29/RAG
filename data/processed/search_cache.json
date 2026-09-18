@@ -5198,5 +5198,64 @@
       "first_character_index": 3166,
       "last_character_index": 3557
     }
+  ],
+  "How does vLLM schedule requests?__k=5": [
+    {
+      "file_path": "data/raw/vllm-0.10.1/tests/v1/kv_connector/unit/test_remote_decode_lifecycle.py",
+      "first_character_index": 398,
+      "last_character_index": 2398
+    },
+    {
+      "file_path": "data/raw/vllm-0.10.1/vllm/v1/core/sched/interface.py",
+      "first_character_index": 652,
+      "last_character_index": 1863
+    },
+    {
+      "file_path": "data/raw/vllm-0.10.1/vllm/engine/llm_engine.py",
+      "first_character_index": 32235,
+      "last_character_index": 32897
+    },
+    {
+      "file_path": "data/raw/vllm-0.10.1/vllm/v1/core/sched/scheduler.py",
+      "first_character_index": 9407,
+      "last_character_index": 11407
+    },
+    {
+      "file_path": "data/raw/vllm-0.10.1/vllm/engine/llm_engine.py",
+      "first_character_index": 25166,
+      "last_character_index": 27166
+    }
+  ],
+  "How does vLLM schedule requests?__k=6": [
+    {
+      "file_path": "data/raw/vllm-0.10.1/tests/v1/kv_connector/unit/test_remote_decode_lifecycle.py",
+      "first_character_index": 398,
+      "last_character_index": 2398
+    },
+    {
+      "file_path": "data/raw/vllm-0.10.1/vllm/v1/core/sched/interface.py",
+      "first_character_index": 652,
+      "last_character_index": 1863
+    },
+    {
+      "file_path": "data/raw/vllm-0.10.1/vllm/engine/llm_engine.py",
+      "first_character_index": 32235,
+      "last_character_index": 32897
+    },
+    {
+      "file_path": "data/raw/vllm-0.10.1/vllm/v1/core/sched/scheduler.py",
+      "first_character_index": 9407,
+      "last_character_index": 11407
+    },
+    {
+      "file_path": "data/raw/vllm-0.10.1/vllm/engine/llm_engine.py",
+      "first_character_index": 25166,
+      "last_character_index": 27166
+    },
+    {
+      "file_path": "data/raw/vllm-0.10.1/tests/v1/core/test_scheduler.py",
+      "first_character_index": 1332,
+      "last_character_index": 1780
+    }
   ]
 }

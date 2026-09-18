@@ -14,5 +14,7 @@ dependencies = [
     "accelerate",
     "numpy",
     "sentence-transformers",
-    "faiss-cpu"
+    "faiss-cpu",
+    "fastapi",
+    "uvicorn",
 ]
