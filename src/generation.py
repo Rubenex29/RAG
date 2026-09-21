@@ -4,6 +4,9 @@ from typing import List, cast
 # Third-party dependencies
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
+# Application modules
+from .errors import RAGError
+
 
 class QwenModel:
     """Load Qwen and generate answers from retrieved snippets."""
@@ -12,12 +15,18 @@ class QwenModel:
         """Initialize the configured Qwen model and tokenizer."""
 
         self.model_name = model_name
-        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-
-        self.model = AutoModelForCausalLM.from_pretrained(
-            model_name,
-            device_map="auto"
-        )
+        try:
+            self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+            self.model = AutoModelForCausalLM.from_pretrained(
+                model_name,
+                device_map="auto"
+            )
+        except Exception as exc:
+            raise RAGError(
+                f"Could not load generation model '{model_name}'. Ensure "
+                "that it is cached locally or that internet access is "
+                "available."
+            ) from exc
 
     def generate_answer(self, query: str, snippets: List[str]) -> str:
         """Generate a concise answer grounded in the supplied snippets."""

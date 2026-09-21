@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field
 
 # Application modules
 from .RAG import RAG
+from .errors import RAGError
 
 app = FastAPI(title="RAG API")
 rag = RAG()
@@ -42,6 +43,8 @@ def search(payload: QueryRequest) -> str:
                 ]
             )
         return "\n".join(print_lines)
+    except RAGError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
@@ -53,5 +56,7 @@ def answer(payload: QueryRequest) -> str:
     try:
         answer = rag.service.answer(payload.query, payload.k)
         return answer
+    except RAGError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc

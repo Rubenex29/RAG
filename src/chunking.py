@@ -6,6 +6,7 @@ from typing import Any, Dict, List
 
 # Application modules
 from .storage import hash_file
+from .errors import RAGError
 
 
 class Chunker:
@@ -24,32 +25,56 @@ class Chunker:
         manifest_path = chunk_path.with_name("manifest.json")
         old_manifest = {}
         if manifest_path.exists():
-            with open(manifest_path, "r") as f:
-                old_manifest = json.load(f)
+            old_manifest = self._load_json(manifest_path)
+            if not isinstance(old_manifest, dict):
+                raise RAGError(
+                    f"Manifest '{manifest_path}' has an invalid format. "
+                    "Delete data/processed and run the 'index' command again."
+                )
         elif chunk_path.exists():
-            with open(chunk_path, "r") as f:
-                old_chunks = json.load(f)
+            old_chunks = self._load_json(chunk_path)
+            if not isinstance(old_chunks, list):
+                raise RAGError(
+                    f"Chunks file '{chunk_path}' has an invalid format. "
+                    "Delete data/processed and run the 'index' command again."
+                )
             if old_chunks and all("hash" in chunk for chunk in old_chunks):
-                old_manifest = {
-                    chunk["metadata"]["file_path"]: chunk["hash"]
-                    for chunk in old_chunks
-                }
+                try:
+                    old_manifest = {
+                        chunk["metadata"]["file_path"]: chunk["hash"]
+                        for chunk in old_chunks
+                    }
+                except (KeyError, TypeError) as exc:
+                    raise RAGError(
+                        f"Chunks file '{chunk_path}' has an invalid format. "
+                        "Delete data/processed and run the 'index' command "
+                        "again."
+                    ) from exc
             else:
                 old_manifest = {}
 
-        current_files = [
-            file for file in self.repo.rglob("*")
-            if file.is_file()
-            and file.suffix in {".md", ".rst", ".txt", ".py"}
-        ]
-        current_manifest = {
-            str(file.relative_to(self.project_root)): hash_file(file)
-            for file in current_files
-        }
+        try:
+            current_files = [
+                file for file in self.repo.rglob("*")
+                if file.is_file()
+                and file.suffix in {".md", ".rst", ".txt", ".py"}
+            ]
+            current_manifest = {
+                str(file.relative_to(self.project_root)): hash_file(file)
+                for file in current_files
+            }
+        except OSError as exc:
+            raise RAGError(
+                f"Could not read source repository '{self.repo}': {exc}"
+            ) from exc
 
         if chunk_path.exists():
-            with open(chunk_path, "r") as f:
-                chunks = json.load(f)
+            chunks = self._load_json(chunk_path)
+            if not isinstance(chunks, list):
+                raise RAGError(
+                    f"Chunks file '{chunk_path}' has an invalid format. "
+                    "Delete data/processed and run the 'index' command again."
+                )
         else:
             chunks = []
         if chunks and any("hash" not in chunk for chunk in chunks):
@@ -73,11 +98,31 @@ class Chunker:
             file for file in current_files
             if str(file.relative_to(self.project_root)) in changed_paths
         ]
-        with open(chunk_path, "w") as f:
-            json.dump(chunks, f, indent=2)
-        with open(manifest_path, "w") as f:
-            json.dump(current_manifest, f, indent=2)
+        try:
+            with open(chunk_path, "w") as f:
+                json.dump(chunks, f, indent=2)
+            with open(manifest_path, "w") as f:
+                json.dump(current_manifest, f, indent=2)
+        except OSError as exc:
+            raise RAGError(
+                f"Could not write processed index metadata: {exc}"
+            ) from exc
         return files
+
+    @staticmethod
+    def _load_json(path: Path) -> Any:
+        """Load a JSON file and report a concise user-facing error."""
+
+        try:
+            with open(path, "r") as f:
+                return json.load(f)
+        except json.JSONDecodeError as exc:
+            raise RAGError(
+                f"JSON file '{path}' is invalid. Delete data/processed and "
+                "run the 'index' command again."
+            ) from exc
+        except OSError as exc:
+            raise RAGError(f"Could not read file '{path}': {exc}") from exc
 
     def recursive_chunking(self, text: str, file: Path,
                            chunk_size: int = 2000) -> List[Dict[str, Any]]:
@@ -198,12 +243,21 @@ class Chunker:
                    max_chunk_size: int) -> List[Dict[str, Any]]:
         """Chunk a supported text or Python source file."""
 
-        if file.suffix in {".md", ".rst", ".txt"}:
-            text = file.read_text(encoding="utf-8", errors="ignore")
-            return self.recursive_chunking(text, file, max_chunk_size)
+        try:
+            if file.suffix in {".md", ".rst", ".txt"}:
+                text = file.read_text(encoding="utf-8", errors="ignore")
+                return self.recursive_chunking(text, file, max_chunk_size)
 
-        if file.suffix in {".py"}:
-            text = file.read_text(encoding="utf-8", errors="ignore")
-            return self.python_chunking(text, file, max_chunk_size)
+            if file.suffix == ".py":
+                text = file.read_text(encoding="utf-8", errors="ignore")
+                return self.python_chunking(text, file, max_chunk_size)
+        except SyntaxError as exc:
+            raise RAGError(
+                f"Could not parse Python file '{file}' at line "
+                f"{exc.lineno}: {exc.msg}"
+            ) from exc
+        except OSError as exc:
+            raise RAGError(f"Could not read source file '{file}': {exc}") \
+                from exc
 
         return []

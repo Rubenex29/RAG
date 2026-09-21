@@ -7,6 +7,9 @@ import numpy as np
 import Stemmer  # type: ignore[import-not-found]
 from sentence_transformers import SentenceTransformer
 
+# Application modules
+from .errors import RAGError
+
 
 class EmbeddingModel:
     """Encode text into normalized vectors for semantic retrieval."""
@@ -14,9 +17,15 @@ class EmbeddingModel:
     def __init__(self) -> None:
         """Load the embedding model and set its maximum sequence length."""
 
-        self.model = SentenceTransformer(
-            "BAAI/bge-small-en-v1.5",
-        )
+        model_name = "BAAI/bge-small-en-v1.5"
+        try:
+            self.model = SentenceTransformer(model_name)
+        except Exception as exc:
+            raise RAGError(
+                f"Could not load embedding model '{model_name}'. Ensure "
+                "that it is cached locally or that internet access is "
+                "available."
+            ) from exc
         self.model.max_seq_length = 450
 
     def encode(self, texts: List[str],

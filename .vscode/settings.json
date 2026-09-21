@@ -1,3 +1,4 @@
 {
-    "python.REPL.enableREPLSmartSend": false
+    "python.REPL.enableREPLSmartSend": false,
+    "cmake.sourceDirectory": "/Users/rubensilva/RAG/data/raw/vllm-0.10.1"
 }

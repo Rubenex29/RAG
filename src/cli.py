@@ -7,6 +7,7 @@ import fire  # type: ignore[import-untyped]
 
 # Application modules
 from .RAG import RAG
+from .errors import RAGError
 
 
 class CLI:
@@ -64,4 +65,8 @@ def main() -> None:
         print(f"Error: Invalid command: {sys.argv[1]}")
         sys.exit(1)
 
-    fire.Fire(CLI())
+    try:
+        fire.Fire(CLI())
+    except RAGError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)

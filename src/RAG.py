@@ -18,7 +18,7 @@ def path_to_str(name_path: str, path: Path) -> None:
     """Validate that a command-line path value is a string."""
 
     if not isinstance(path, str):
-        print(f"Error: {name_path} must be a string PAth, got " +
+        print(f"Error: {name_path} must be a string path, got " +
               f"{type(path).__name__}")
         sys.exit(1)
 
@@ -37,6 +37,9 @@ class RAG:
         if not isinstance(max_chunk_size, int):
             print("Error: max_chunk_size must be an integer, got " +
                   f"{type(max_chunk_size).__name__}")
+            sys.exit(1)
+        if max_chunk_size <= 0:
+            print("Error: max_chunk_size must be a positive integer.")
             sys.exit(1)
         self.service.index(max_chunk_size=max_chunk_size)
 
@@ -67,6 +70,9 @@ class RAG:
         if not isinstance(k, int):
             print(f"Error: k must be an integer, got {type(k).__name__}")
             sys.exit(1)
+        if k <= 0:
+            print("Error: k must be a positive integer.")
+            sys.exit(1)
         path_to_str("dataset_path", dataset_path)
         path_to_str("save_directory", save_directory)
         self.service.search_dataset(dataset_path, k, save_directory)
@@ -93,17 +99,3 @@ class RAG:
         path_to_str("save_directory", save_directory)
         self.service.answer_dataset(student_search_results_path,
                                     save_directory)
-
-
-"""
-export HF_HOME=/sgoinfre/$(whoami)/hf_cache
-export UV_CACHE_DIR=/sgoinfre/$USER/uv_cache
-uv run python -m src index --max_chunk_size 2000
-uv run python -m src search_dataset --dataset_path data/datasets/UnansweredQuestions/dataset_docs_public.json --k 10 --save_directory data/output/search_results/UnansweredQuestions
-./moulinette evaluate_student_search_results data/output/search_results/UnansweredQuestions/dataset_docs_public.json data/datasets/AnsweredQuestions/dataset_docs_public.json --k 10 --max_context_length 2000
-uv run python -m src answer_dataset --student_search_results_path data/output/search_results/UnansweredQuestions/dataset_docs_public.json --save_directory data/output/search_results_and_answer/UnansweredQuestions
-
-MacOS:
-OMP_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 uv run python -m src search "what is a RAG?" --k 10
-OMP_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 uv run python -m src answer "what is a RAG?" --k 10
-"""
