@@ -99,7 +99,7 @@ class RAGService:
                 "found; rebuilding it."
             )
         first_index = not chunks_path.exists()
-        files = self.chunker.process_files(chunks_path)
+        files = self.chunker.process_files(chunks_path, max_chunk_size)
         try:
             with open(chunks_path, "r") as f:
                 all_chunks = json.load(f)
@@ -301,7 +301,11 @@ class RAGService:
         questions = dataset.rag_questions
 
         search_results = []
-        for item in questions:
+        for item in tqdm(
+            questions,
+            desc="Searching questions",
+            dynamic_ncols=True,
+        ):
             result = MinimalSearchResults(
                 question_id=item.question_id,
                 question=item.question,

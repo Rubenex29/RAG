@@ -12,13 +12,16 @@ from .errors import RAGError
 class Chunker:
     """Find changed files and split their contents into searchable chunks."""
 
+    CHUNK_SIZE_KEY = "__max_chunk_size__"
+
     def __init__(self, project_root: Path, repo: Path):
         """Store the project root and repository to be indexed."""
 
         self.project_root = project_root
         self.repo = repo
 
-    def process_files(self, chunk_path: Path) -> List[Path]:
+    def process_files(self, chunk_path: Path,
+                      chunk_size: int) -> List[Path]:
         """Update manifests and return files that need reindexing."""
 
         files = []
@@ -53,6 +56,8 @@ class Chunker:
             else:
                 old_manifest = {}
 
+        old_chunk_size = old_manifest.pop(self.CHUNK_SIZE_KEY, None)
+
         try:
             current_files = [
                 file for file in self.repo.rglob("*")
@@ -79,6 +84,9 @@ class Chunker:
             chunks = []
         if chunks and any("hash" not in chunk for chunk in chunks):
             chunks = []
+        if old_chunk_size != str(chunk_size):
+            chunks = []
+            old_manifest = {}
         if not chunks:
             old_manifest = {}
 
@@ -98,6 +106,7 @@ class Chunker:
             file for file in current_files
             if str(file.relative_to(self.project_root)) in changed_paths
         ]
+        current_manifest[self.CHUNK_SIZE_KEY] = str(chunk_size)
         try:
             with open(chunk_path, "w") as f:
                 json.dump(chunks, f, indent=2)
@@ -196,7 +205,8 @@ class Chunker:
             context = "\n".join(
                 f"class {name}" for name in reversed(class_names)
             )
-            indexed_code = f"{context}\n{code}" if context else code
+            context_prefix = f"{context}\n" if context else ""
+            indexed_code = f"{context_prefix}{code}"
 
             if len(indexed_code) <= MAX_CHUNK_LENGTH:
                 chunks.append(
@@ -218,11 +228,13 @@ class Chunker:
                 continue
 
             start = character_offset(node.lineno, node.col_offset)
-            for chunk_start in range(0, len(code), MAX_CHUNK_LENGTH):
-                chunk_end = min(chunk_start + MAX_CHUNK_LENGTH, len(code))
-                chunk_content = code[chunk_start:chunk_end]
-                if context:
-                    chunk_content = f"{context}\n{chunk_content}"
+            code_chunk_size = MAX_CHUNK_LENGTH - len(context_prefix)
+            if code_chunk_size <= 0:
+                context_prefix = ""
+                code_chunk_size = MAX_CHUNK_LENGTH
+            for chunk_start in range(0, len(code), code_chunk_size):
+                chunk_end = min(chunk_start + code_chunk_size, len(code))
+                chunk_content = context_prefix + code[chunk_start:chunk_end]
 
                 chunks.append(
                     {
