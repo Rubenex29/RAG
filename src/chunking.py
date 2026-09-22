@@ -3,6 +3,7 @@ import ast
 import json
 from pathlib import Path
 from typing import Any, Dict, List
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 # Application modules
 from .storage import hash_file
@@ -133,20 +134,21 @@ class Chunker:
         except OSError as exc:
             raise RAGError(f"Could not read file '{path}': {exc}") from exc
 
-    def recursive_chunking(self, text: str, file: Path,
-                           chunk_size: int = 2000) -> List[Dict[str, Any]]:
-        """Split plain text into overlapping chunks with source metadata."""
-
+    def recursive_chunking(self, text: str, file: Path, chunk_size=2000):
+        text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_size // 10,
+            separators=["\n\n", "\n", ". ", "! ", "? ", " ", ""],
+            add_start_index=True,
+        )
         chunks = []
-        stride = max(1, int(chunk_size * 0.45))
-        for start in range(0, len(text), stride):
-            content = text[start:start + chunk_size]
-            if not content:
-                continue
-            end = start + len(content)
+        docs = text_splitter.create_documents([text])
+        for doc in docs:
+            start: int = doc.metadata["start_index"]
+            end: int = start + len(doc.page_content)
             chunks.append(
                 {
-                    "content": content,
+                    "content": doc.page_content,
                     "hash": hash_file(file),
                     "metadata": {
                         "type": "text",
