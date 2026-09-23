@@ -23,8 +23,8 @@ debug:
 
 clean:
 	find . -type d -name "__pycache__" -prune -exec rm -rf {} +
+	find . -type d \( -name ".mypy_cache" -o -name ".pytest_cache" -o -name ".ruff_cache" \) -prune -exec rm -rf {} +
 	find . -type f \( -name "*.pyc" -o -name "*.pyo" \) -delete
-	rm -rf .mypy_cache .pytest_cache .ruff_cache
 
 clean-venv:
 	rm -rf .venv
