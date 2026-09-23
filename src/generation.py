@@ -19,7 +19,7 @@ class QwenModel:
             self.tokenizer = AutoTokenizer.from_pretrained(model_name)
             self.model = AutoModelForCausalLM.from_pretrained(
                 model_name,
-                device_map="auto"
+                device_map="cpu"
             )
         except Exception as exc:
             raise RAGError(
