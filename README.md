@@ -40,26 +40,17 @@ The main technologies are:
 ## System Architecture
 
 ```mermaid
-flowchart LR
-    A[vLLM source tree] --> B[Chunker]
-    B --> C[chunks.json]
-    C --> D[BM25 tokenizer]
-    C --> E[BGE embedding model]
-    D --> F[BM25 index]
-    E --> G[FAISS vector index]
-
-    Q[User question] --> H{Search cache}
-    H -->|miss| I[BM25 retrieval]
-    H -->|miss| J[Semantic retrieval]
-    F --> I
-    G --> J
-    I --> K[Weighted RRF]
-    J --> K
-    K --> L[Top-k source spans]
-    L --> H
-    L --> M[Qwen3-0.6B]
-    Q --> M
-    M --> N[Grounded answer]
+flowchart TD
+    A[vLLM source code] --> B[Detect changed files]
+    B --> C[Split files into chunks]
+    C --> D[BM25 and embeddings]
+    D --> E[BM25 and FAISS indexes]
+    E --> F[User question]
+    F --> G[Lexical and semantic search]
+    G --> H[Weighted RRF]
+    H --> I[Most relevant chunks]
+    I --> J[Qwen model]
+    J --> K[Grounded answer]
 ```
 
 The main modules and their responsibilities are:
@@ -68,6 +59,7 @@ The main modules and their responsibilities are:
 | --- | --- |
 | `src/cli.py` | Exposes the CLI commands through Python Fire. |
 | `src/chunking.py` | Discovers supported files and creates source-aware chunks. |
+| `src/errors.py` | Defines the application-specific error type. |
 | `src/embeddings.py` | Provides the BM25 tokenizer and semantic embedding model. |
 | `src/storage.py` | Loads and saves chunks and embedding data. |
 | `src/retrieval.py` | Runs BM25 and FAISS retrieval, then fuses both rankings. |
@@ -89,17 +81,20 @@ The default maximum chunk size is 2,000 characters and can be changed through
 
 ### Documentation and text files
 
-Files ending in `.md`, `.rst`, or `.txt` are split with a sliding character
-window. With the default size:
+Files ending in `.md`, `.rst`, or `.txt` are split with LangChain's
+`RecursiveCharacterTextSplitter`. It tries increasingly smaller separators in
+this order: paragraphs, lines, sentence boundaries, spaces, and finally
+individual characters. This keeps natural text units together whenever they
+fit within the configured chunk size.
 
-- window size: 2,000 characters;
-- stride: 900 characters (`45%` of the window size);
-- overlap: 1,100 characters (`55%` of the window size).
+With the default settings:
 
-The large overlap helps preserve information that crosses a chunk boundary,
-which improves the probability that a complete supporting passage appears in
-at least one result. The trade-off is a larger index and more near-duplicate
-candidates.
+- maximum chunk size: 2,000 characters;
+- overlap: 200 characters (`10%` of the maximum chunk size);
+- separators: paragraph, line, sentence, word, and character boundaries.
+
+The overlap preserves some context across adjacent chunks, while recursive
+splitting avoids cutting structured text too early.
 
 ### Python files
 
@@ -193,8 +188,8 @@ The table uses the first `k` results from the hybrid ranking built with
 
 | Dataset | Recall@1 | Recall@3 | Recall@5 | Recall@10 |
 | --- | ---: | ---: | ---: | ---: |
-| Documentation | 58% | 79% | 88% | 91% |
-| Code | 41% | 47% | 57% | 61% |
+| Documentation | 54% | 74% | 81% | 88% |
+| Code | 38% | 49% | 59% | 60% |
 
 The documentation results benefit from overlapping windows and repeated domain
 terms. Code questions are harder because symbols can be referenced indirectly
@@ -217,16 +212,6 @@ These numbers are indicative rather than universal: CPU model support, thread
 configuration, storage speed, cache state, and chunk count all affect runtime.
 Index construction is more expensive than retrieval because every chunk must
 be tokenized and embedded, but its artifacts are persisted for later runs.
-
-To reproduce the official retrieval evaluation on the campus Linux machine:
-
-```bash
-./moulinette evaluate_student_search_results \
-  data/output/search_results/UnansweredQuestions/dataset_docs_public.json \
-  data/datasets/AnsweredQuestions/dataset_docs_public.json \
-  --k 10 \
-  --max_context_length 2000
-```
 
 ## Design Decisions and Trade-offs
 
@@ -315,7 +300,7 @@ Semantic retrieval is implemented with the CPU-compatible
 
 Every uncached search executes BM25 and semantic retrieval and combines them
 with weighted RRF. The measured hybrid results are shown in the performance
-table: Recall@5 reaches 88% for documentation and 57% for code.
+table: Recall@5 reaches 81% for documentation and 59% for code.
 
 ### Persistent index and query caching
 
