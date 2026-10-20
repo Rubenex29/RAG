@@ -362,6 +362,22 @@ test returned HTTP 200 for `/health` and `/search`, with all ten requested
 results present in the search response. The commands for reproducing the test
 manually are included below.
 
+## Repository contents
+
+- `src/` contains the RAG implementation.
+- `data/raw/vllm-0.10.1/` is the third-party source corpus being indexed,
+  retained so source paths and character offsets remain reproducible. It is
+  marked as vendored for GitHub language statistics.
+- `data/datasets/` contains the public evaluation questions and reference sources.
+- `data/processed/` and `data/output/` are generated locally and ignored by Git.
+- The optional course evaluator, `moulinette`, must be obtained separately from
+  the 42 evaluation environment if required. It is not needed for indexing,
+  search, answer generation, or the API, and is not distributed in this repository.
+
+Editor settings, virtual environments, model caches, and generated artifacts
+should remain local. Lint commands target `src/` so they check the RAG
+implementation rather than the vendored vLLM corpus.
+
 ## Instructions
 
 ### Requirements

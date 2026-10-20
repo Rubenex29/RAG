@@ -10,3 +10,10 @@ data/processed/
 data/output/
 moulinette
 todo.txt
+
+# OS metadata and local build output
+.DS_Store
+/build/
+/dist/
+.coverage
+htmlcov/
