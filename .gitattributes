@@ -1,0 +1,5 @@
+# The indexed corpus is third-party source, not the RAG implementation.
+data/raw/** linguist-vendored
+# Persisted indexes and evaluation outputs are generated artifacts.
+data/processed/** linguist-generated
+data/output/** linguist-generated
