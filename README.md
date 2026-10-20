@@ -1,6 +1,48 @@
-*This project has been created as part of the 42 curriculum by rumontei.*
-
 # RAG Against the Machine
+
+**Ask questions about a codebase. Retrieve the source. Generate answers locally.**
+
+A CPU-friendly retrieval-augmented generation system for the vLLM 0.10.1
+codebase and documentation, built with Python, BM25, FAISS and FastAPI.
+
+[Quick start](#quick-start) · [Architecture](#system-architecture) ·
+[Evaluation](#performance-analysis) · [Setup and API](#instructions)
+
+## At a glance
+
+| Capability | Implementation |
+| --- | --- |
+| Hybrid search | BM25 + BGE embeddings, fused with weighted Reciprocal Rank Fusion |
+| Source traceability | File paths and exact character intervals for retrieved passages |
+| Code-aware indexing | Python AST segmentation and recursive text splitting |
+| Local inference | Qwen3-0.6B answer generation on CPU |
+| Interfaces | Command-line tools and FastAPI endpoints |
+| Repeatable workflows | Persisted indexes, query caching and dataset evaluation commands |
+
+## Quick start
+
+Requires Python 3.10+, `uv`, and the source corpus at
+`data/raw/vllm-0.10.1`. The first run downloads model weights; subsequent
+inference can run locally with the required files cached.
+
+```bash
+git clone https://github.com/Rubenex29/RAG.git
+cd RAG
+make install
+make run ARGS='index --max_chunk_size 2000'
+make run ARGS='search "How does vLLM load a LoRA adapter?" --k 10'
+make run ARGS='answer "How does vLLM load a LoRA adapter?" --k 10'
+```
+
+For an interactive API demo, run
+`uv run uvicorn src.api:app --host 127.0.0.1 --port 8000`
+and open [localhost:8000/docs](http://127.0.0.1:8000/docs).
+
+Search returns ranked source locations; answer generation uses retrieved
+context. Retrieval recall and generated-answer correctness are separate:
+the [reported evaluation](#performance-analysis) measures retrieval.
+
+*Created as part of the 42 curriculum by rumontei.*
 
 ## Description
 
@@ -176,9 +218,13 @@ the amount of context and detail available for complex questions.
 
 ## Performance Analysis
 
-The current processed index contains 1,971 source files and 22,239 chunks. Its
+The previously measured processed index contains 1,971 source files and 22,239 chunks. Its
 artifacts occupy approximately 114 MB, including a 7 MB BM25 index, a 52 MB
 embedding archive, and a 34 MB FAISS index.
+
+The following figures are retained from the project's existing evaluation;
+they were not rerun for this presentation update. Index and timing measurements
+may differ after changes to chunking or retrieval configuration.
 
 Recall was measured on the two public datasets, each containing 100 questions.
 A relevant source is counted as retrieved when the file path matches and the
@@ -225,8 +271,8 @@ be tokenized and embedded, but its artifacts are persisted for later runs.
 - **Exact FAISS search:** `IndexFlatIP` introduces no approximation error and is
   fast enough for roughly 22,000 chunks. A much larger corpus would benefit
   from an approximate index to reduce latency and memory use.
-- **Overlapping text windows:** a 55% overlap protects boundary-spanning facts
-  and raises recall, but increases index size and duplicate results.
+- **Recursive text splitting:** a 10% target overlap retains context across
+  adjacent passages while limiting index size and redundant results.
 - **AST-aware Python chunks:** functions and methods are more meaningful than
   arbitrary code windows and retain accurate offsets. The strategy gives less
   coverage to module-level declarations and very large functions.
@@ -254,7 +300,7 @@ character count before calculating each interval.
 
 Small chunks are precise but may omit required context; large chunks contain
 more context but dilute lexical and semantic signals. The project uses a
-2,000-character default, substantial overlap for documentation, and logical
+2,000-character default, recursive splitting for documentation, and logical
 function boundaries for Python.
 
 ### Combining unrelated ranking scales
